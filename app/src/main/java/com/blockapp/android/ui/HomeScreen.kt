@@ -33,6 +33,7 @@ import com.blockapp.android.admin.DeviceAdminHelper
 import com.blockapp.android.data.BlockedAppEntity
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
 
 @Composable
 fun HomeScreen(onAddLock: () -> Unit, onEnterKey: () -> Unit, onOnboarding: () -> Unit) {
@@ -63,6 +64,10 @@ fun HomeScreen(onAddLock: () -> Unit, onEnterKey: () -> Unit, onOnboarding: () -
     LifecycleResumeEffect(Unit) {
         isAdminActive = DeviceAdminHelper.isAdminActive(context)
         isAccessibilityActive = DeviceAdminHelper.isAccessibilityActive(context)
+        // One-shot sweep, not a poll: catches a lock whose expiry alarm was missed (see
+        // BlockApplication's cold-start sweep for why that can happen) every time the user
+        // looks at this screen, at zero background cost since it only runs on resume.
+        app.applicationScope.launch { app.repository.expireAllDue() }
         onPauseOrDispose {}
     }
 

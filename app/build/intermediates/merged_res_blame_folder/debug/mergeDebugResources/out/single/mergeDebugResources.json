@@ -1,14 +1,10 @@
 [
     {
-        "merged": "/home/burhan/.gradle/daemon/9.3.0/com.blockapp.android.app-debug-49:/xml_device_admin_receiver.xml.flat",
-        "source": "/home/burhan/.gradle/daemon/9.3.0/com.blockapp.android.app-main-51:/xml/device_admin_receiver.xml"
+        "merged": "com.blockapp.android.app-debug-49:/xml_device_admin_receiver.xml.flat",
+        "source": "com.blockapp.android.app-main-51:/xml/device_admin_receiver.xml"
     },
     {
         "merged": "com.blockapp.android.app-debug-49:/xml_accessibility_service_config.xml.flat",
         "source": "com.blockapp.android.app-main-51:/xml/accessibility_service_config.xml"
-    },
-    {
-        "merged": "/home/burhan/.gradle/daemon/9.3.0/com.blockapp.android.app-debug-49:/xml_accessibility_service_config.xml.flat",
-        "source": "/home/burhan/.gradle/daemon/9.3.0/com.blockapp.android.app-main-51:/xml/accessibility_service_config.xml"
     }
 ]

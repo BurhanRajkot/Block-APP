@@ -11,6 +11,11 @@ import com.blockapp.android.R
 import com.blockapp.android.admin.DeviceAdminHelper
 import com.blockapp.android.ui.BlockOverlayActivity
 import com.blockapp.android.util.ProtectedPackages
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 
 /**
@@ -42,6 +47,8 @@ import kotlinx.coroutines.runBlocking
 class AppBlockAccessibilityService : AccessibilityService() {
 
     private val handler = Handler(Looper.getMainLooper())
+    private var serviceScope: CoroutineScope? = null
+    private var watchdogScheduled = false
 
     /**
      * Backstop against missed events. onAccessibilityEvent only fires when the system decides
@@ -53,6 +60,11 @@ class AppBlockAccessibilityService : AccessibilityService() {
      * stops working after a while" bug. Polling the foreground window on a short fixed interval
      * closes that gap: even a fully missed event gets caught on the very next tick instead of
      * never.
+     *
+     * Only ever scheduled while [BlockApplication.repository]'s activeLocks is non-empty (see
+     * the collector in onServiceConnected) — there is nothing to self-heal when nothing is
+     * locked, so it costs zero wakeups the rest of the time this service is connected, which is
+     * effectively all the time once Accessibility is granted.
      */
     private val watchdog = object : Runnable {
         override fun run() {
@@ -69,23 +81,40 @@ class AppBlockAccessibilityService : AccessibilityService() {
      * just came back), so onAccessibilityEvent alone would never catch it until the user
      * switched away and back. Checking the current window here, straight from Room rather
      * than the in-memory cache (which may not have caught up with Room's async Flow yet this
-     * soon after a cold start), closes that gap immediately; the watchdog then keeps closing it
-     * for as long as the service stays connected.
+     * soon after a cold start), closes that gap immediately; the collector started below then
+     * keeps the watchdog running for as long as a lock is actually active.
      */
     override fun onServiceConnected() {
         super.onServiceConnected()
+        val app = application as BlockApplication
         val currentPackage = rootInActiveWindow?.packageName?.toString()
         if (currentPackage != null) {
-            val app = application as BlockApplication
             val blockUntil = runBlocking { app.repository.getActiveLockUntil(currentPackage) }
             if (blockUntil != null) kickToHome(blockUntil)
         }
-        handler.removeCallbacks(watchdog)
-        handler.post(watchdog)
+
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        serviceScope = scope
+        scope.launch {
+            app.repository.activeLocks.collect { locks ->
+                if (locks.isNotEmpty()) {
+                    if (!watchdogScheduled) {
+                        watchdogScheduled = true
+                        handler.post(watchdog)
+                    }
+                } else if (watchdogScheduled) {
+                    watchdogScheduled = false
+                    handler.removeCallbacks(watchdog)
+                }
+            }
+        }
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
         handler.removeCallbacks(watchdog)
+        watchdogScheduled = false
+        serviceScope?.cancel()
+        serviceScope = null
         return super.onUnbind(intent)
     }
 

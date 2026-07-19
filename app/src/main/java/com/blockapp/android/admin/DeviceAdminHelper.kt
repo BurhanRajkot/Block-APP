@@ -1,9 +1,11 @@
 package com.blockapp.android.admin
 
 import android.app.admin.DevicePolicyManager
+import android.app.AlarmManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
 
@@ -20,6 +22,18 @@ object DeviceAdminHelper {
     fun isIgnoringBatteryOptimizations(context: Context): Boolean {
         val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
         return powerManager.isIgnoringBatteryOptimizations(context.packageName)
+    }
+
+    /**
+     * Whether this app can schedule exact alarms (used to auto-expire a lock at the right
+     * moment). Below API 31 this was unrestricted, so it's always true there. On API 31-32 it's
+     * granted automatically at install; on API 33+ the user must grant it explicitly via
+     * Settings, and can revoke it later, so this must be re-checked rather than assumed.
+     */
+    fun canScheduleExactAlarms(context: Context): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return true
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        return alarmManager.canScheduleExactAlarms()
     }
 
     /**

@@ -4,6 +4,7 @@ import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.provider.Settings
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -37,6 +38,7 @@ fun OnboardingScreen(onDone: () -> Unit, onRemoveProtection: () -> Unit) {
     var isAccessibilityActive by remember { mutableStateOf(false) }
     var isAdminActive by remember { mutableStateOf(false) }
     var isBatteryUnrestricted by remember { mutableStateOf(false) }
+    var canScheduleExactAlarms by remember { mutableStateOf(false) }
 
     // Re-check every time this screen resumes (e.g. coming back from Settings). A one-shot
     // check on first composition would go stale the moment the user leaves and returns,
@@ -45,10 +47,11 @@ fun OnboardingScreen(onDone: () -> Unit, onRemoveProtection: () -> Unit) {
         isAccessibilityActive = DeviceAdminHelper.isAccessibilityActive(context)
         isAdminActive = DeviceAdminHelper.isAdminActive(context)
         isBatteryUnrestricted = DeviceAdminHelper.isIgnoringBatteryOptimizations(context)
+        canScheduleExactAlarms = DeviceAdminHelper.canScheduleExactAlarms(context)
         onPauseOrDispose {}
     }
 
-    val allGranted = isAccessibilityActive && isAdminActive && isBatteryUnrestricted
+    val allGranted = isAccessibilityActive && isAdminActive && isBatteryUnrestricted && canScheduleExactAlarms
 
     Scaffold { padding ->
         Column(
@@ -112,6 +115,17 @@ fun OnboardingScreen(onDone: () -> Unit, onRemoveProtection: () -> Unit) {
                 onClick = { requestIgnoreBatteryOptimizations(context) },
             )
 
+            Spacer(Modifier.height(16.dp))
+            PermissionItem(
+                granted = canScheduleExactAlarms,
+                title = "4. Exact alarms",
+                rationale = "Lets a lock lift itself at the exact moment its timer ends, " +
+                    "instead of drifting late. It's used only for that — no reminders or " +
+                    "other alarms are ever scheduled.",
+                buttonLabel = "Allow exact alarms",
+                onClick = { requestScheduleExactAlarm(context) },
+            )
+
             Spacer(Modifier.height(24.dp))
             if (allGranted) {
                 Text(
@@ -160,6 +174,14 @@ private fun PermissionItem(
             Button(onClick = onClick, modifier = Modifier.fillMaxWidth()) { Text(buttonLabel) }
         }
     }
+}
+
+private fun requestScheduleExactAlarm(context: Context) {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+    context.startActivity(
+        Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:${context.packageName}"))
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+    )
 }
 
 private fun requestIgnoreBatteryOptimizations(context: Context) {
