@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="accessibility_service_description">Detects when a locked app is opened and returns you to the home screen until its timer ends.</string>
+    <string name="app_name">App Blocker</string>
+    <string name="guard_notification_channel_name">Block Guard</string>
+    <string name="guard_notification_text">Keeping locked apps enforced. Tap to open App Blocker.</string>
+    <string name="guard_notification_title">Blocking is active</string>
+</resources>

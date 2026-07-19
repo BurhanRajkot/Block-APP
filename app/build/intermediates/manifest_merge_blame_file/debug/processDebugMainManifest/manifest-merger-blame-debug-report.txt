@@ -1,0 +1,250 @@
+1<?xml version="1.0" encoding="utf-8"?>
+2<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+3    package="com.blockapp.android"
+4    android:versionCode="1"
+5    android:versionName="1.0" >
+6
+7    <uses-sdk
+8        android:minSdkVersion="26"
+9        android:targetSdkVersion="34" />
+10
+11    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+11-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:5:5-81
+11-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:5:22-78
+12    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+12-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:6:5-95
+12-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:6:22-92
+13    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+13-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:7:5-77
+13-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:7:22-74
+14    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+14-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:8:5-89
+14-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:8:22-86
+15    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+15-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:9:5-77
+15-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:9:22-74
+16    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+16-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:10:5-12:53
+16-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:11:9-61
+17
+18    <permission
+18-->[androidx.core:core:1.13.1] /home/burhan/.gradle/caches/9.3.0/transforms/4b8c403ebbe2eea90e05c66a8b4eeafd/transformed/core-1.13.1/AndroidManifest.xml:22:5-24:47
+19        android:name="com.blockapp.android.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
+19-->[androidx.core:core:1.13.1] /home/burhan/.gradle/caches/9.3.0/transforms/4b8c403ebbe2eea90e05c66a8b4eeafd/transformed/core-1.13.1/AndroidManifest.xml:23:9-81
+20        android:protectionLevel="signature" />
+20-->[androidx.core:core:1.13.1] /home/burhan/.gradle/caches/9.3.0/transforms/4b8c403ebbe2eea90e05c66a8b4eeafd/transformed/core-1.13.1/AndroidManifest.xml:24:9-44
+21
+22    <uses-permission android:name="com.blockapp.android.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION" />
+22-->[androidx.core:core:1.13.1] /home/burhan/.gradle/caches/9.3.0/transforms/4b8c403ebbe2eea90e05c66a8b4eeafd/transformed/core-1.13.1/AndroidManifest.xml:26:5-97
+22-->[androidx.core:core:1.13.1] /home/burhan/.gradle/caches/9.3.0/transforms/4b8c403ebbe2eea90e05c66a8b4eeafd/transformed/core-1.13.1/AndroidManifest.xml:26:22-94
+23
+24    <application
+24-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:14:5-82:19
+25        android:name="com.blockapp.android.BlockApplication"
+25-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:15:9-41
+26        android:allowBackup="false"
+26-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:19:9-36
+27        android:appComponentFactory="androidx.core.app.CoreComponentFactory"
+27-->[androidx.core:core:1.13.1] /home/burhan/.gradle/caches/9.3.0/transforms/4b8c403ebbe2eea90e05c66a8b4eeafd/transformed/core-1.13.1/AndroidManifest.xml:28:18-86
+28        android:debuggable="true"
+29        android:extractNativeLibs="false"
+30        android:icon="@android:drawable/sym_def_app_icon"
+30-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:17:9-58
+31        android:label="@string/app_name"
+31-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:16:9-41
+32        android:theme="@android:style/Theme.Material.Light.NoActionBar" >
+32-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:18:9-72
+33        <activity
+33-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:21:9-28:20
+34            android:name="com.blockapp.android.MainActivity"
+34-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:22:13-41
+35            android:exported="true" >
+35-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:23:13-36
+36            <intent-filter>
+36-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:24:13-27:29
+37                <action android:name="android.intent.action.MAIN" />
+37-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:25:17-69
+37-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:25:25-66
+38
+39                <category android:name="android.intent.category.LAUNCHER" />
+39-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:26:17-77
+39-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:26:27-74
+40            </intent-filter>
+41        </activity>
+42        <activity
+42-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:30:9-35:79
+43            android:name="com.blockapp.android.ui.BlockOverlayActivity"
+43-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:31:13-52
+44            android:excludeFromRecents="true"
+44-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:34:13-46
+45            android:exported="false"
+45-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:32:13-37
+46            android:launchMode="singleTask"
+46-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:33:13-44
+47            android:theme="@android:style/Theme.Material.Light.NoActionBar" />
+47-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:35:13-76
+48
+49        <receiver
+49-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:37:9-47:20
+50            android:name="com.blockapp.android.admin.BlockDeviceAdminReceiver"
+50-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:38:13-59
+51            android:exported="true"
+51-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:40:13-36
+52            android:permission="android.permission.BIND_DEVICE_ADMIN" >
+52-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:39:13-70
+53            <meta-data
+53-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:41:13-43:65
+54                android:name="android.app.device_admin"
+54-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:42:17-56
+55                android:resource="@xml/device_admin_receiver" />
+55-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:43:17-62
+56
+57            <intent-filter>
+57-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:44:13-46:29
+58                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+58-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:45:17-82
+58-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:45:25-79
+59            </intent-filter>
+60        </receiver>
+61        <receiver
+61-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:49:9-51:40
+62            android:name="com.blockapp.android.alarm.BlockExpiryReceiver"
+62-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:50:13-54
+63            android:exported="false" />
+63-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:51:13-37
+64        <receiver
+64-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:53:9-59:20
+65            android:name="com.blockapp.android.alarm.BootCompletedReceiver"
+65-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:54:13-56
+66            android:exported="true" >
+66-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:55:13-36
+67            <intent-filter>
+67-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:56:13-58:29
+68                <action android:name="android.intent.action.BOOT_COMPLETED" />
+68-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:57:17-79
+68-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:57:25-76
+69            </intent-filter>
+70        </receiver>
+71
+72        <service
+72-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:61:9-71:19
+73            android:name="com.blockapp.android.accessibility.AppBlockAccessibilityService"
+73-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:62:13-71
+74            android:exported="true"
+74-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:64:13-36
+75            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE" >
+75-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:63:13-79
+76            <intent-filter>
+76-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:65:13-67:29
+77                <action android:name="android.accessibilityservice.AccessibilityService" />
+77-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:66:17-92
+77-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:66:25-89
+78            </intent-filter>
+79
+80            <meta-data
+80-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:68:13-70:72
+81                android:name="android.accessibilityservice"
+81-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:69:17-60
+82                android:resource="@xml/accessibility_service_config" />
+82-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:70:17-69
+83        </service>
+84        <service
+84-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:73:9-80:19
+85            android:name="com.blockapp.android.service.BlockGuardService"
+85-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:74:13-54
+86            android:exported="false"
+86-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:76:13-37
+87            android:foregroundServiceType="specialUse" >
+87-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:75:13-55
+88            <property
+88-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:77:13-79:109
+89                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+89-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:78:17-76
+90                android:value="Keeps the app-blocking accessibility service alive while a lock is active" />
+90-->/home/burhan/Desktop/BLOCK-APP/app/src/main/AndroidManifest.xml:79:17-106
+91        </service>
+92
+93        <activity
+93-->[androidx.compose.ui:ui-tooling-android:1.7.5] /home/burhan/.gradle/caches/9.3.0/transforms/26dad687e33bd509b16960f00ccda0bf/transformed/ui-tooling-release/AndroidManifest.xml:23:9-25:39
+94            android:name="androidx.compose.ui.tooling.PreviewActivity"
+94-->[androidx.compose.ui:ui-tooling-android:1.7.5] /home/burhan/.gradle/caches/9.3.0/transforms/26dad687e33bd509b16960f00ccda0bf/transformed/ui-tooling-release/AndroidManifest.xml:24:13-71
+95            android:exported="true" />
+95-->[androidx.compose.ui:ui-tooling-android:1.7.5] /home/burhan/.gradle/caches/9.3.0/transforms/26dad687e33bd509b16960f00ccda0bf/transformed/ui-tooling-release/AndroidManifest.xml:25:13-36
+96
+97        <provider
+97-->[androidx.emoji2:emoji2:1.3.0] /home/burhan/.gradle/caches/9.3.0/transforms/523992874ceafd22fbe8b8e074afad69/transformed/emoji2-1.3.0/AndroidManifest.xml:24:9-32:20
+98            android:name="androidx.startup.InitializationProvider"
+98-->[androidx.emoji2:emoji2:1.3.0] /home/burhan/.gradle/caches/9.3.0/transforms/523992874ceafd22fbe8b8e074afad69/transformed/emoji2-1.3.0/AndroidManifest.xml:25:13-67
+99            android:authorities="com.blockapp.android.androidx-startup"
+99-->[androidx.emoji2:emoji2:1.3.0] /home/burhan/.gradle/caches/9.3.0/transforms/523992874ceafd22fbe8b8e074afad69/transformed/emoji2-1.3.0/AndroidManifest.xml:26:13-68
+100            android:exported="false" >
+100-->[androidx.emoji2:emoji2:1.3.0] /home/burhan/.gradle/caches/9.3.0/transforms/523992874ceafd22fbe8b8e074afad69/transformed/emoji2-1.3.0/AndroidManifest.xml:27:13-37
+101            <meta-data
+101-->[androidx.emoji2:emoji2:1.3.0] /home/burhan/.gradle/caches/9.3.0/transforms/523992874ceafd22fbe8b8e074afad69/transformed/emoji2-1.3.0/AndroidManifest.xml:29:13-31:52
+102                android:name="androidx.emoji2.text.EmojiCompatInitializer"
+102-->[androidx.emoji2:emoji2:1.3.0] /home/burhan/.gradle/caches/9.3.0/transforms/523992874ceafd22fbe8b8e074afad69/transformed/emoji2-1.3.0/AndroidManifest.xml:30:17-75
+103                android:value="androidx.startup" />
+103-->[androidx.emoji2:emoji2:1.3.0] /home/burhan/.gradle/caches/9.3.0/transforms/523992874ceafd22fbe8b8e074afad69/transformed/emoji2-1.3.0/AndroidManifest.xml:31:17-49
+104            <meta-data
+104-->[androidx.lifecycle:lifecycle-process:2.8.6] /home/burhan/.gradle/caches/9.3.0/transforms/a087129f9cd5425417c18e1acb5d4db2/transformed/lifecycle-process-2.8.6/AndroidManifest.xml:29:13-31:52
+105                android:name="androidx.lifecycle.ProcessLifecycleInitializer"
+105-->[androidx.lifecycle:lifecycle-process:2.8.6] /home/burhan/.gradle/caches/9.3.0/transforms/a087129f9cd5425417c18e1acb5d4db2/transformed/lifecycle-process-2.8.6/AndroidManifest.xml:30:17-78
+106                android:value="androidx.startup" />
+106-->[androidx.lifecycle:lifecycle-process:2.8.6] /home/burhan/.gradle/caches/9.3.0/transforms/a087129f9cd5425417c18e1acb5d4db2/transformed/lifecycle-process-2.8.6/AndroidManifest.xml:31:17-49
+107            <meta-data
+107-->[androidx.profileinstaller:profileinstaller:1.3.1] /home/burhan/.gradle/caches/9.3.0/transforms/2224722e01eeea01d124675933389049/transformed/profileinstaller-1.3.1/AndroidManifest.xml:29:13-31:52
+108                android:name="androidx.profileinstaller.ProfileInstallerInitializer"
+108-->[androidx.profileinstaller:profileinstaller:1.3.1] /home/burhan/.gradle/caches/9.3.0/transforms/2224722e01eeea01d124675933389049/transformed/profileinstaller-1.3.1/AndroidManifest.xml:30:17-85
+109                android:value="androidx.startup" />
+109-->[androidx.profileinstaller:profileinstaller:1.3.1] /home/burhan/.gradle/caches/9.3.0/transforms/2224722e01eeea01d124675933389049/transformed/profileinstaller-1.3.1/AndroidManifest.xml:31:17-49
+110        </provider>
+111
+112        <service
+112-->[androidx.room:room-runtime:2.6.1] /home/burhan/.gradle/caches/9.3.0/transforms/b1bae3441f4d760c4fb7f460a883072a/transformed/room-runtime-2.6.1/AndroidManifest.xml:24:9-28:63
+113            android:name="androidx.room.MultiInstanceInvalidationService"
+113-->[androidx.room:room-runtime:2.6.1] /home/burhan/.gradle/caches/9.3.0/transforms/b1bae3441f4d760c4fb7f460a883072a/transformed/room-runtime-2.6.1/AndroidManifest.xml:25:13-74
+114            android:directBootAware="true"
+114-->[androidx.room:room-runtime:2.6.1] /home/burhan/.gradle/caches/9.3.0/transforms/b1bae3441f4d760c4fb7f460a883072a/transformed/room-runtime-2.6.1/AndroidManifest.xml:26:13-43
+115            android:exported="false" />
+115-->[androidx.room:room-runtime:2.6.1] /home/burhan/.gradle/caches/9.3.0/transforms/b1bae3441f4d760c4fb7f460a883072a/transformed/room-runtime-2.6.1/AndroidManifest.xml:27:13-37
+116
+117        <receiver
+117-->[androidx.profileinstaller:profileinstaller:1.3.1] /home/burhan/.gradle/caches/9.3.0/transforms/2224722e01eeea01d124675933389049/transformed/profileinstaller-1.3.1/AndroidManifest.xml:34:9-52:20
+118            android:name="androidx.profileinstaller.ProfileInstallReceiver"
+118-->[androidx.profileinstaller:profileinstaller:1.3.1] /home/burhan/.gradle/caches/9.3.0/transforms/2224722e01eeea01d124675933389049/transformed/profileinstaller-1.3.1/AndroidManifest.xml:35:13-76
+119            android:directBootAware="false"
+119-->[androidx.profileinstaller:profileinstaller:1.3.1] /home/burhan/.gradle/caches/9.3.0/transforms/2224722e01eeea01d124675933389049/transformed/profileinstaller-1.3.1/AndroidManifest.xml:36:13-44
+120            android:enabled="true"
+120-->[androidx.profileinstaller:profileinstaller:1.3.1] /home/burhan/.gradle/caches/9.3.0/transforms/2224722e01eeea01d124675933389049/transformed/profileinstaller-1.3.1/AndroidManifest.xml:37:13-35
+121            android:exported="true"
+121-->[androidx.profileinstaller:profileinstaller:1.3.1] /home/burhan/.gradle/caches/9.3.0/transforms/2224722e01eeea01d124675933389049/transformed/profileinstaller-1.3.1/AndroidManifest.xml:38:13-36
+122            android:permission="android.permission.DUMP" >
+122-->[androidx.profileinstaller:profileinstaller:1.3.1] /home/burhan/.gradle/caches/9.3.0/transforms/2224722e01eeea01d124675933389049/transformed/profileinstaller-1.3.1/AndroidManifest.xml:39:13-57
+123            <intent-filter>
+123-->[androidx.profileinstaller:profileinstaller:1.3.1] /home/burhan/.gradle/caches/9.3.0/transforms/2224722e01eeea01d124675933389049/transformed/profileinstaller-1.3.1/AndroidManifest.xml:40:13-42:29
+124                <action android:name="androidx.profileinstaller.action.INSTALL_PROFILE" />
+124-->[androidx.profileinstaller:profileinstaller:1.3.1] /home/burhan/.gradle/caches/9.3.0/transforms/2224722e01eeea01d124675933389049/transformed/profileinstaller-1.3.1/AndroidManifest.xml:41:17-91
+124-->[androidx.profileinstaller:profileinstaller:1.3.1] /home/burhan/.gradle/caches/9.3.0/transforms/2224722e01eeea01d124675933389049/transformed/profileinstaller-1.3.1/AndroidManifest.xml:41:25-88
+125            </intent-filter>
+126            <intent-filter>
+126-->[androidx.profileinstaller:profileinstaller:1.3.1] /home/burhan/.gradle/caches/9.3.0/transforms/2224722e01eeea01d124675933389049/transformed/profileinstaller-1.3.1/AndroidManifest.xml:43:13-45:29
+127                <action android:name="androidx.profileinstaller.action.SKIP_FILE" />
+127-->[androidx.profileinstaller:profileinstaller:1.3.1] /home/burhan/.gradle/caches/9.3.0/transforms/2224722e01eeea01d124675933389049/transformed/profileinstaller-1.3.1/AndroidManifest.xml:44:17-85
+127-->[androidx.profileinstaller:profileinstaller:1.3.1] /home/burhan/.gradle/caches/9.3.0/transforms/2224722e01eeea01d124675933389049/transformed/profileinstaller-1.3.1/AndroidManifest.xml:44:25-82
+128            </intent-filter>
+129            <intent-filter>
+129-->[androidx.profileinstaller:profileinstaller:1.3.1] /home/burhan/.gradle/caches/9.3.0/transforms/2224722e01eeea01d124675933389049/transformed/profileinstaller-1.3.1/AndroidManifest.xml:46:13-48:29
+130                <action android:name="androidx.profileinstaller.action.SAVE_PROFILE" />
+130-->[androidx.profileinstaller:profileinstaller:1.3.1] /home/burhan/.gradle/caches/9.3.0/transforms/2224722e01eeea01d124675933389049/transformed/profileinstaller-1.3.1/AndroidManifest.xml:47:17-88
+130-->[androidx.profileinstaller:profileinstaller:1.3.1] /home/burhan/.gradle/caches/9.3.0/transforms/2224722e01eeea01d124675933389049/transformed/profileinstaller-1.3.1/AndroidManifest.xml:47:25-85
+131            </intent-filter>
+132            <intent-filter>
+132-->[androidx.profileinstaller:profileinstaller:1.3.1] /home/burhan/.gradle/caches/9.3.0/transforms/2224722e01eeea01d124675933389049/transformed/profileinstaller-1.3.1/AndroidManifest.xml:49:13-51:29
+133                <action android:name="androidx.profileinstaller.action.BENCHMARK_OPERATION" />
+133-->[androidx.profileinstaller:profileinstaller:1.3.1] /home/burhan/.gradle/caches/9.3.0/transforms/2224722e01eeea01d124675933389049/transformed/profileinstaller-1.3.1/AndroidManifest.xml:50:17-95
+133-->[androidx.profileinstaller:profileinstaller:1.3.1] /home/burhan/.gradle/caches/9.3.0/transforms/2224722e01eeea01d124675933389049/transformed/profileinstaller-1.3.1/AndroidManifest.xml:50:25-92
+134            </intent-filter>
+135        </receiver>
+136    </application>
+137
+138</manifest>
