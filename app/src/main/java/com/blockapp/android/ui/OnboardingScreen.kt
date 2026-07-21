@@ -14,11 +14,15 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -31,6 +35,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.blockapp.android.admin.DeviceAdminHelper
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun OnboardingScreen(onDone: () -> Unit, onRemoveProtection: () -> Unit) {
     val context = LocalContext.current
@@ -53,14 +58,25 @@ fun OnboardingScreen(onDone: () -> Unit, onRemoveProtection: () -> Unit) {
 
     val allGranted = isAccessibilityActive && isAdminActive && isBatteryUnrestricted && canScheduleExactAlarms
 
-    Scaffold { padding ->
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Setup") },
+                actions = {
+                    // Deliberately always visible here, not buried at the end of a long
+                    // scrolling permission list — this is the one way out of protection and
+                    // it needs to be findable without hunting for it.
+                    TextButton(onClick = onRemoveProtection) { Text("Remove protection") }
+                },
+            )
+        },
+    ) { padding ->
         Column(
             Modifier
                 .padding(padding)
-                .padding(16.dp),
+                .padding(16.dp)
+                .verticalScroll(rememberScrollState()),
         ) {
-            Text("Setup", style = MaterialTheme.typography.titleLarge)
-            Spacer(Modifier.height(4.dp))
             Text(
                 "Privacy note: everything below runs entirely on this device. No usage data, " +
                     "screen content, or installed-app list is ever sent anywhere — these " +
@@ -90,8 +106,8 @@ fun OnboardingScreen(onDone: () -> Unit, onRemoveProtection: () -> Unit) {
                 granted = isAdminActive,
                 title = "2. Device Admin",
                 rationale = "Required so the app can't be casually uninstalled while a lock is " +
-                    "active. Once this is on, use \"Remove protection\" below (not Settings) " +
-                    "if you ever want to take it off.",
+                    "active. Once this is on, use \"Remove protection\" at the top of this " +
+                    "screen (not Settings) if you ever want to take it off.",
                 buttonLabel = "Activate Device Admin",
                 onClick = {
                     context.startActivity(
@@ -130,19 +146,15 @@ fun OnboardingScreen(onDone: () -> Unit, onRemoveProtection: () -> Unit) {
             if (allGranted) {
                 Text(
                     "✅ Protection is fully armed. Accessibility and Device Admin settings are " +
-                        "now guarded against tampering — use \"Remove protection\" below if you " +
-                        "ever need to turn this off.",
+                        "now guarded against tampering — use \"Remove protection\" at the top of " +
+                        "this screen if you ever need to turn this off.",
                     style = MaterialTheme.typography.bodySmall,
                 )
                 Spacer(Modifier.height(16.dp))
             }
 
             Button(onClick = onDone, modifier = Modifier.fillMaxWidth()) { Text("Done") }
-
-            Spacer(Modifier.height(24.dp))
-            TextButton(onClick = onRemoveProtection, modifier = Modifier.fillMaxWidth()) {
-                Text("Remove protection & uninstall")
-            }
+            Spacer(Modifier.height(16.dp))
         }
     }
 }

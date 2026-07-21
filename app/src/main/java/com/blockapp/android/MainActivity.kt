@@ -20,6 +20,7 @@ import com.blockapp.android.ui.AppPickerScreen
 import com.blockapp.android.ui.HomeScreen
 import com.blockapp.android.ui.OnboardingScreen
 import com.blockapp.android.ui.RemoveProtectionScreen
+import com.blockapp.android.ui.ScreenTimeScreen
 import com.blockapp.android.ui.UnlockKeyScreen
 
 private sealed class Screen {
@@ -28,6 +29,7 @@ private sealed class Screen {
     data object AppPicker : Screen()
     data object UnlockKey : Screen()
     data object RemoveProtection : Screen()
+    data object ScreenTime : Screen()
 }
 
 class MainActivity : ComponentActivity() {
@@ -65,6 +67,7 @@ private fun AppRoot() {
                 onAddLock = { screen = Screen.AppPicker },
                 onEnterKey = { screen = Screen.UnlockKey },
                 onOnboarding = { screen = Screen.Onboarding },
+                onScreenTime = { screen = Screen.ScreenTime },
             )
             Screen.AppPicker -> AppPickerScreen(onDone = { screen = Screen.Home })
             Screen.UnlockKey -> UnlockKeyScreen(onDone = { screen = Screen.Home })
@@ -76,6 +79,7 @@ private fun AppRoot() {
                 onDone = { screen = Screen.Home },
                 onEnterKey = { screen = Screen.UnlockKey },
             )
+            Screen.ScreenTime -> ScreenTimeScreen(onBack = { screen = Screen.Home })
         }
     }
 }

@@ -36,7 +36,12 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
 @Composable
-fun HomeScreen(onAddLock: () -> Unit, onEnterKey: () -> Unit, onOnboarding: () -> Unit) {
+fun HomeScreen(
+    onAddLock: () -> Unit,
+    onEnterKey: () -> Unit,
+    onOnboarding: () -> Unit,
+    onScreenTime: () -> Unit,
+) {
     val context = LocalContext.current
     val app = context.applicationContext as BlockApplication
     var locks by remember { mutableStateOf<List<BlockedAppEntity>>(emptyList()) }
@@ -153,6 +158,12 @@ fun HomeScreen(onAddLock: () -> Unit, onEnterKey: () -> Unit, onOnboarding: () -
                 Text("Enter unlock key")
             }
             Spacer(Modifier.height(8.dp))
+            // Stacked, not side-by-side: a Row spanning full width here runs its trailing
+            // button's label under the FAB, which floats over content rather than reserving
+            // space for itself (Scaffold's contentPadding doesn't account for it).
+            TextButton(onClick = onScreenTime, modifier = Modifier.fillMaxWidth()) {
+                Text("Screen time")
+            }
             TextButton(onClick = onOnboarding, modifier = Modifier.fillMaxWidth()) {
                 Text("Permissions setup")
             }

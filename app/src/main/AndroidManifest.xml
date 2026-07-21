@@ -14,6 +14,12 @@
     <uses-permission
         android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission" />
+    <!-- Not granted at install time — the app must be enabled in the "Usage access" list under
+         Settings > Special app access. Declaring it here is what makes the app show up in that
+         list at all; actual access is checked via AppOpsManager (see UsageStatsProvider). -->
+    <uses-permission
+        android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions" />
 
     <application
         android:name=".BlockApplication"
