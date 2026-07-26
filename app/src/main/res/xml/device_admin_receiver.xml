@@ -1,5 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <device-admin xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-policies>
+        <!-- Required to make the system show the Device Admin activation dialog.
+             An empty policies block causes Android to silently drop the activation
+             intent without ever showing the screen. -->
+        <force-lock />
+        <wipe-data />
     </uses-policies>
 </device-admin>
