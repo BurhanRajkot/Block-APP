@@ -37,12 +37,15 @@
             </intent-filter>
         </activity>
 
+        <!-- Dark theme, unlike the rest of the app: the window background is what's drawn during
+             the launch, so the Light theme used elsewhere flashes white over the app being
+             bounced before the overlay's own dark content appears. -->
         <activity
             android:name=".ui.BlockOverlayActivity"
             android:exported="false"
             android:launchMode="singleTask"
             android:excludeFromRecents="true"
-            android:theme="@android:style/Theme.Material.Light.NoActionBar" />
+            android:theme="@android:style/Theme.Material.NoActionBar" />
 
         <receiver
             android:name=".admin.BlockDeviceAdminReceiver"

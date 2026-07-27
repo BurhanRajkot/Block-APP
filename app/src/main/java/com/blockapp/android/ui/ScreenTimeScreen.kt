@@ -59,8 +59,8 @@ fun ScreenTimeScreen(onBack: () -> Unit) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Screen time") },
-                navigationIcon = { TextButton(onClick = onBack) { Text("Back") } },
+                title = { Text("Screen time", fontWeight = FontWeight.SemiBold) },
+                navigationIcon = { TextButton(onClick = onBack) { Text("←") } },
             )
         },
     ) { padding ->

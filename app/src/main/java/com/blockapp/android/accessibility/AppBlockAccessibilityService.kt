@@ -90,7 +90,7 @@ class AppBlockAccessibilityService : AccessibilityService() {
         val currentPackage = rootInActiveWindow?.packageName?.toString()
         if (currentPackage != null) {
             val blockUntil = runBlocking { app.repository.getActiveLockUntil(currentPackage) }
-            if (blockUntil != null) kickToHome(blockUntil)
+            if (blockUntil != null) kickToHome(currentPackage, blockUntil)
         }
 
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -150,7 +150,7 @@ class AppBlockAccessibilityService : AccessibilityService() {
         val activeLocks = app.repository.activeLocks.value
         if (activeLocks.isEmpty()) return
         val currentPackage = knownPackage ?: rootInActiveWindow?.packageName?.toString() ?: return
-        activeLocks[currentPackage]?.let { blockUntil -> kickToHome(blockUntil) }
+        activeLocks[currentPackage]?.let { blockUntil -> kickToHome(currentPackage, blockUntil) }
     }
 
     /**
@@ -203,10 +203,18 @@ class AppBlockAccessibilityService : AccessibilityService() {
             root.findAccessibilityNodeInfosByText(packageName).isNotEmpty()
     }
 
-    private fun kickToHome(blockUntil: Long) {
+    private fun kickToHome(packageName: String, blockUntil: Long) {
         performGlobalAction(GLOBAL_ACTION_HOME)
         val overlayIntent = Intent(this, BlockOverlayActivity::class.java).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            // NO_ANIMATION on top of the usual flags: without it the user sees the launcher's
+            // window animation and then the overlay's, back to back, which reads as a glitch
+            // rather than as one deliberate bounce.
+            addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                    Intent.FLAG_ACTIVITY_NO_ANIMATION,
+            )
+            putExtra(BlockOverlayActivity.EXTRA_PACKAGE_NAME, packageName)
             putExtra(BlockOverlayActivity.EXTRA_BLOCK_UNTIL, blockUntil)
         }
         startActivity(overlayIntent)

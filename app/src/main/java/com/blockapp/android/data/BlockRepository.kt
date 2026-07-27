@@ -41,12 +41,31 @@ class BlockRepository(
      * the instant they open — including for this app's own setup/removal flows, which live
      * inside Settings. That's a self-inflicted lockout, so it's refused here as a backstop
      * even though the app picker already excludes them from the list (see ProtectedPackages).
+     *
+     * **Locks only ever extend, never shorten.** [BlockDao.insert] is REPLACE, so without the
+     * merge below, re-locking an already-locked app for a shorter time would overwrite its
+     * blockUntil and end the running lock early — a fully in-app early exit, which is the one
+     * thing this app exists to prevent. An unlock key is the only thing allowed to bring a
+     * blockUntil forward (see [applyUnlockKey]), because that key can only be minted off-device.
+     *
+     * The original [BlockedAppEntity.blockedAt] is kept for the same reason it's stored at all:
+     * it's the denominator of the progress ring on HomeScreen and the block screen, so resetting
+     * it on an extend would snap a nearly-finished lock back to 0%.
      */
     fun lockApp(packageName: String, label: String, blockUntil: Long) {
         if (packageName in ProtectedPackages.ALL) return
         scope.launch {
-            dao.insert(BlockedAppEntity(packageName, label, System.currentTimeMillis(), blockUntil))
-            AlarmScheduler.schedule(context, packageName, blockUntil)
+            val existing = dao.getActiveLock(packageName)
+            val effectiveUntil = maxOf(blockUntil, existing?.blockUntil ?: 0L)
+            dao.insert(
+                BlockedAppEntity(
+                    packageName = packageName,
+                    appLabel    = label,
+                    blockedAt   = existing?.blockedAt ?: System.currentTimeMillis(),
+                    blockUntil  = effectiveUntil,
+                ),
+            )
+            AlarmScheduler.schedule(context, packageName, effectiveUntil)
         }
     }
 
@@ -55,7 +74,16 @@ class BlockRepository(
      * service right after it (re)connects — e.g. after the process was killed and restarted —
      * when the in-memory cache may not have caught up with Room's async Flow yet.
      */
-    suspend fun getActiveLockUntil(packageName: String): Long? = dao.getActiveLock(packageName)?.blockUntil
+    suspend fun getActiveLockUntil(packageName: String): Long? = getActiveLock(packageName)?.blockUntil
+
+    /**
+     * The full record for one active lock, for UI that needs more than the expiry time —
+     * BlockOverlayActivity uses [BlockedAppEntity.blockedAt] to show how far through the lock the
+     * user already is. Deliberately not folded into [activeLocks]: that map is read on every
+     * window-state event by the accessibility service, so it stays a bare packageName -> Long to
+     * keep that path a single map lookup, and a display-only field must not widen it.
+     */
+    suspend fun getActiveLock(packageName: String): BlockedAppEntity? = dao.getActiveLock(packageName)
 
     suspend fun expireDuePackage(packageName: String) {
         val lock = dao.getActiveLock(packageName) ?: return
