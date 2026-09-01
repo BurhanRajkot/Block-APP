@@ -3,8 +3,22 @@ package com.blockapp.android.ui
 import android.content.Context
 import android.content.pm.PackageManager
 import android.util.LruCache
+import androidx.compose.foundation.background
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Apps
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toBitmap
 
 /** Display name and launcher icon for a package, as resolved from PackageManager. */
@@ -39,6 +53,40 @@ internal fun loadAppIdentity(context: Context, packageName: String): AppIdentity
     }
     cache.put(packageName, identity)
     return identity
+}
+
+/**
+ * Renders [identity]'s launcher icon at [size].dp, or a generic app glyph if the package has
+ * since been uninstalled (see [loadAppIdentity] on why that's an expected state, not an error).
+ * Shared by every screen that lists apps — [AppPickerScreen], [FocusModeScreen], lock rows on
+ * [HomeScreen] — so the fallback treatment can't drift between them.
+ */
+@Composable
+internal fun AppIcon(identity: AppIdentity, size: Int) {
+    if (identity.icon != null) {
+        Image(
+            bitmap = identity.icon,
+            contentDescription = null,
+            modifier = Modifier
+                .size(size.dp)
+                .clip(CircleShape),
+        )
+    } else {
+        Box(
+            modifier = Modifier
+                .size(size.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                Icons.Filled.Apps,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size((size * 0.55f).dp),
+            )
+        }
+    }
 }
 
 /**

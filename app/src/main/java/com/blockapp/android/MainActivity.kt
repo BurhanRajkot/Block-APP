@@ -9,7 +9,6 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -20,18 +19,21 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 import com.blockapp.android.admin.DeviceAdminHelper
 import com.blockapp.android.ui.AppPickerScreen
+import com.blockapp.android.ui.FocusModeScreen
 import com.blockapp.android.ui.HomeScreen
 import com.blockapp.android.ui.OnboardingScreen
 import com.blockapp.android.ui.RemoveProtectionScreen
 import com.blockapp.android.ui.ScreenTimeScreen
 import com.blockapp.android.ui.SettingsScreen
 import com.blockapp.android.ui.UnlockKeyScreen
+import com.blockapp.android.ui.theme.BlockAppTheme
 
 private sealed class Screen {
     data object Home : Screen()
     data object Settings : Screen()
     data object Onboarding : Screen()
     data object AppPicker : Screen()
+    data object FocusMode : Screen()
     data object UnlockKey : Screen()
     data object RemoveProtection : Screen()
     data object ScreenTime : Screen()
@@ -48,6 +50,7 @@ private fun Screen.parent(): Screen = when (this) {
     Screen.Home -> Screen.Home
     Screen.Settings -> Screen.Home
     Screen.AppPicker -> Screen.Home
+    Screen.FocusMode -> Screen.Home
     Screen.UnlockKey -> Screen.Home
     Screen.Onboarding -> Screen.Settings
     Screen.ScreenTime -> Screen.Settings
@@ -71,7 +74,7 @@ class MainActivity : ComponentActivity() {
             requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
         setContent {
-            MaterialTheme {
+            BlockAppTheme {
                 Surface {
                     AppRoot()
                 }
@@ -103,6 +106,7 @@ private fun AppRoot() {
         when (screen) {
             Screen.Home -> HomeScreen(
                 onAddLock = { screen = Screen.AppPicker },
+                onFocusMode = { screen = Screen.FocusMode },
                 onEnterKey = { screen = Screen.UnlockKey },
                 onSettings = { screen = Screen.Settings },
             )
@@ -114,6 +118,10 @@ private fun AppRoot() {
                 onRemoveProtection = { screen = Screen.RemoveProtection },
             )
             Screen.AppPicker -> AppPickerScreen(
+                onBack = { screen = Screen.Home },
+                onLocked = { screen = Screen.Home },
+            )
+            Screen.FocusMode -> FocusModeScreen(
                 onBack = { screen = Screen.Home },
                 onLocked = { screen = Screen.Home },
             )

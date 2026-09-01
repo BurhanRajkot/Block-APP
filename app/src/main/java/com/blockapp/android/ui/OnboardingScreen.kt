@@ -38,10 +38,24 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AccessibilityNew
+import androidx.compose.material.icons.filled.Alarm
+import androidx.compose.material.icons.filled.BarChart
+import androidx.compose.material.icons.filled.BatteryChargingFull
+import androidx.compose.material.icons.filled.Celebration
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -58,29 +72,20 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.blockapp.android.admin.DeviceAdminHelper
+import com.blockapp.android.ui.theme.StatusColors
 import com.blockapp.android.usage.UsageStatsProvider
-
-// ── status colours ────────────────────────────────────────────────────────────
-// Everything else in this screen (background, surfaces, text, accent) comes from
-// MaterialTheme.colorScheme so it matches the rest of the app. These are the only
-// screen-specific colours — the same green/red/amber semantics already used on HomeScreen's
-// protection banner — kept literal because "granted / needs attention" is a status,
-// not a brand colour.
-private val GrantedGreen   = Color(0xFF2E7D32)
-private val NeedsAttention = Color(0xFFB71C1C)
-private val HeadsUpAmber   = Color(0xFFB26A00)
 
 // ── data model ────────────────────────────────────────────────────────────────
 private data class SetupStep(
-    val icon: String,
+    val icon: ImageVector,
     val title: String,
     val rationale: String,
     /**
@@ -147,7 +152,7 @@ fun OnboardingScreen(
     val requiredSteps = remember(isAccessibilityActive, isAdminActive) {
         listOf(
             SetupStep(
-                icon        = "♿",
+                icon        = Icons.Filled.AccessibilityNew,
                 title       = "Accessibility Service",
                 rationale   = "Detects when a locked app comes to the foreground so it can " +
                     "redirect you away — entirely on-device. It does not read what you type or " +
@@ -167,7 +172,7 @@ fun OnboardingScreen(
                 },
             ),
             SetupStep(
-                icon        = "🛡️",
+                icon        = Icons.Filled.Shield,
                 title       = "Device Admin",
                 rationale   = "Makes Android require deactivating admin before the app can be " +
                     "uninstalled, so it can't be removed in a couple of taps mid-lock. To turn " +
@@ -221,7 +226,7 @@ fun OnboardingScreen(
     ) {
         listOf(
             SetupStep(
-                icon        = "🔋",
+                icon        = Icons.Filled.BatteryChargingFull,
                 title       = "Ignore battery optimisations",
                 rationale   = "Some manufacturers silently kill background services to save " +
                     "power. Without this a lock can stop being enforced partway through.",
@@ -231,7 +236,7 @@ fun OnboardingScreen(
                 onClick     = { requestIgnoreBatteryOptimizations(context) },
             ),
             SetupStep(
-                icon        = "⏰",
+                icon        = Icons.Filled.Alarm,
                 title       = "Exact alarms",
                 rationale   = "Lifts a lock at the moment its timer ends instead of drifting " +
                     "late. Without it locks still expire, just not always punctually.",
@@ -241,7 +246,7 @@ fun OnboardingScreen(
                 onClick     = { requestScheduleExactAlarm(context) },
             ),
             SetupStep(
-                icon        = "🔔",
+                icon        = Icons.Filled.Notifications,
                 title       = "Notifications",
                 rationale   = "Shows the ongoing \"blocking is active\" notification. Hidden, " +
                     "the keep-alive service is a quieter target for battery managers to kill.",
@@ -251,7 +256,7 @@ fun OnboardingScreen(
                 onClick     = { openNotificationSettings(context) },
             ),
             SetupStep(
-                icon        = "📊",
+                icon        = Icons.Filled.BarChart,
                 title       = "Usage access",
                 rationale   = "Only used by the Screen time screen. Nothing else reads it, and " +
                     "no usage data leaves the device.",
@@ -277,11 +282,13 @@ fun OnboardingScreen(
             TopAppBar(
                 title = { Text("Setup", fontWeight = FontWeight.SemiBold) },
                 navigationIcon = {
-                    TextButton(onClick = onBack) { Text("←") }
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
                 },
                 actions = {
                     TextButton(onClick = onRemoveProtection) {
-                        Text("Remove protection", color = NeedsAttention)
+                        Text("Remove protection", color = StatusColors.Danger)
                     }
                 },
             )
@@ -358,14 +365,26 @@ fun OnboardingScreen(
 
             Spacer(Modifier.height(24.dp))
 
-            Text(
-                "🔒  Everything runs entirely on this device. No usage data, screen content, " +
-                    "or app list is ever transmitted anywhere.",
-                style     = MaterialTheme.typography.labelSmall,
-                color     = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-                modifier  = Modifier.padding(horizontal = 24.dp),
-            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp),
+            ) {
+                Icon(
+                    Icons.Filled.Lock,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    "Everything runs entirely on this device. No usage data, screen content, " +
+                        "or app list is ever transmitted anywhere.",
+                    style     = MaterialTheme.typography.labelSmall,
+                    color     = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                )
+            }
             Spacer(Modifier.height(16.dp))
         }
     }
@@ -393,7 +412,7 @@ private fun ProgressHeader(grantedCount: Int, total: Int, progress: Float) {
             Text(
                 "$grantedCount / $total",
                 style      = MaterialTheme.typography.titleSmall,
-                color      = if (grantedCount == total) GrantedGreen else MaterialTheme.colorScheme.primary,
+                color      = if (grantedCount == total) StatusColors.Success else MaterialTheme.colorScheme.primary,
                 fontWeight = FontWeight.Bold,
             )
         }
@@ -404,7 +423,7 @@ private fun ProgressHeader(grantedCount: Int, total: Int, progress: Float) {
                 .fillMaxWidth()
                 .height(6.dp)
                 .clip(RoundedCornerShape(50)),
-            color      = if (grantedCount == total) GrantedGreen else MaterialTheme.colorScheme.primary,
+            color      = if (grantedCount == total) StatusColors.Success else MaterialTheme.colorScheme.primary,
             trackColor = MaterialTheme.colorScheme.surfaceVariant,
             strokeCap  = StrokeCap.Round,
         )
@@ -448,18 +467,18 @@ private fun RestrictedSettingsCard(onOpenAppInfo: () -> Unit) {
             .fillMaxWidth()
             .padding(horizontal = 16.dp),
         shape     = RoundedCornerShape(16.dp),
-        colors    = CardDefaults.cardColors(containerColor = HeadsUpAmber.copy(alpha = 0.10f)),
+        colors    = CardDefaults.cardColors(containerColor = StatusColors.Warning.copy(alpha = 0.10f)),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
     ) {
         Column(Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("⚠️", style = MaterialTheme.typography.titleMedium)
+                Icon(Icons.Filled.WarningAmber, contentDescription = null, tint = StatusColors.Warning)
                 Spacer(Modifier.width(10.dp))
                 Text(
                     "Accessibility toggle greyed out?",
                     style      = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.Bold,
-                    color      = HeadsUpAmber,
+                    color      = StatusColors.Warning,
                 )
             }
             Spacer(Modifier.height(8.dp))
@@ -481,7 +500,7 @@ private fun RestrictedSettingsCard(onOpenAppInfo: () -> Unit) {
                         "${index + 1}.",
                         style      = MaterialTheme.typography.bodySmall,
                         fontWeight = FontWeight.Bold,
-                        color      = HeadsUpAmber,
+                        color      = StatusColors.Warning,
                         modifier   = Modifier.width(20.dp),
                     )
                     Text(
@@ -507,7 +526,7 @@ private fun RestrictedSettingsCard(onOpenAppInfo: () -> Unit) {
 @Composable
 private fun RequiredStepCard(step: SetupStep, index: Int, total: Int) {
     val cardBg by animateColorAsState(
-        targetValue   = if (step.isGranted) GrantedGreen.copy(alpha = 0.08f) else MaterialTheme.colorScheme.surfaceVariant,
+        targetValue   = if (step.isGranted) StatusColors.Success.copy(alpha = 0.08f) else MaterialTheme.colorScheme.surfaceVariant,
         animationSpec = tween(durationMillis = 500),
         label         = "cardBg",
     )
@@ -527,12 +546,16 @@ private fun RequiredStepCard(step: SetupStep, index: Int, total: Int) {
                         .size(40.dp)
                         .clip(CircleShape)
                         .background(
-                            if (step.isGranted) GrantedGreen.copy(alpha = 0.15f)
+                            if (step.isGranted) StatusColors.Success.copy(alpha = 0.15f)
                             else MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
                         ),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text(step.icon, style = MaterialTheme.typography.titleMedium)
+                    Icon(
+                        step.icon,
+                        contentDescription = null,
+                        tint = if (step.isGranted) StatusColors.Success else MaterialTheme.colorScheme.primary,
+                    )
                 }
                 Spacer(Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
@@ -572,11 +595,20 @@ private fun RequiredStepCard(step: SetupStep, index: Int, total: Int) {
                 Column {
                     if (step.blockedReason != null) {
                         Spacer(Modifier.height(12.dp))
-                        Text(
-                            "🔒  ${step.blockedReason}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                        Row {
+                            Icon(
+                                Icons.Filled.Lock,
+                                contentDescription = null,
+                                modifier = Modifier.size(14.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                step.blockedReason,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     } else if (step.howTo.isNotEmpty()) {
                         Spacer(Modifier.height(12.dp))
                         Text(
@@ -627,7 +659,7 @@ private fun RecommendedStepRow(step: SetupStep) {
             .clickable(enabled = !step.isGranted, onClick = step.onClick),
         shape     = RoundedCornerShape(14.dp),
         colors    = CardDefaults.cardColors(
-            containerColor = if (step.isGranted) GrantedGreen.copy(alpha = 0.06f)
+            containerColor = if (step.isGranted) StatusColors.Success.copy(alpha = 0.06f)
             else MaterialTheme.colorScheme.surfaceVariant,
         ),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
@@ -636,7 +668,11 @@ private fun RecommendedStepRow(step: SetupStep) {
             modifier          = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(step.icon, style = MaterialTheme.typography.titleMedium)
+            Icon(
+                step.icon,
+                contentDescription = null,
+                tint = if (step.isGranted) StatusColors.Success else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(
@@ -661,16 +697,29 @@ private fun RecommendedStepRow(step: SetupStep) {
 private fun StatusChip(granted: Boolean, pendingLabel: String = "Pending") {
     Surface(
         shape = RoundedCornerShape(50),
-        color = if (granted) GrantedGreen.copy(alpha = 0.15f)
+        color = if (granted) StatusColors.Success.copy(alpha = 0.15f)
         else MaterialTheme.colorScheme.tertiaryContainer,
     ) {
-        Text(
-            if (granted) "✓ On" else pendingLabel,
-            style      = MaterialTheme.typography.labelSmall,
-            color      = if (granted) GrantedGreen else MaterialTheme.colorScheme.onTertiaryContainer,
-            fontWeight = FontWeight.Bold,
-            modifier   = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+        ) {
+            if (granted) {
+                Icon(
+                    Icons.Filled.CheckCircle,
+                    contentDescription = null,
+                    tint = StatusColors.Success,
+                    modifier = Modifier.height(12.dp),
+                )
+                Spacer(Modifier.width(4.dp))
+            }
+            Text(
+                if (granted) "On" else pendingLabel,
+                style      = MaterialTheme.typography.labelSmall,
+                color      = if (granted) StatusColors.Success else MaterialTheme.colorScheme.onTertiaryContainer,
+                fontWeight = FontWeight.Bold,
+            )
+        }
     }
 }
 
@@ -682,19 +731,19 @@ private fun AllDoneBanner() {
             .fillMaxWidth()
             .padding(horizontal = 16.dp),
         shape  = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = GrantedGreen.copy(alpha = 0.1f)),
+        colors = CardDefaults.cardColors(containerColor = StatusColors.Success.copy(alpha = 0.1f)),
     ) {
         Row(
             modifier              = Modifier.padding(16.dp),
             verticalAlignment     = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text("🎉", style = MaterialTheme.typography.headlineMedium)
+            Icon(Icons.Filled.Celebration, contentDescription = null, tint = StatusColors.Success)
             Column {
                 Text(
                     "Protection armed",
                     style      = MaterialTheme.typography.titleSmall,
-                    color      = GrantedGreen,
+                    color      = StatusColors.Success,
                     fontWeight = FontWeight.Bold,
                 )
                 Text(

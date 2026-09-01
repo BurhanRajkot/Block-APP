@@ -23,15 +23,30 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.filled.BarChart
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Extension
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Inventory2
+import androidx.compose.material.icons.filled.RadioButtonUnchecked
+import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.VpnKey
+import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -42,16 +57,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.blockapp.android.admin.DeviceAdminHelper
+import com.blockapp.android.ui.theme.StatusColors
 import com.blockapp.android.usage.UsageStatsProvider
-
-// Status colours, matching HomeScreen's banner and OnboardingScreen's cards.
-private val GrantedGreen   = Color(0xFF2E7D32)
-private val NeedsAttention = Color(0xFFB71C1C)
 
 /**
  * The app's one hub for everything that isn't "lock an app": protection status, setup, screen
@@ -105,7 +118,11 @@ fun SettingsScreen(
         topBar = {
             TopAppBar(
                 title = { Text("Settings", fontWeight = FontWeight.SemiBold) },
-                navigationIcon = { TextButton(onClick = onBack) { Text("←") } },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
             )
         },
     ) { padding ->
@@ -125,7 +142,7 @@ fun SettingsScreen(
 
             SettingsSection("Tools") {
                 SettingsRow(
-                    icon      = "📊",
+                    icon      = Icons.Filled.BarChart,
                     title     = "Screen time",
                     subtitle  = if (hasUsageAccess) {
                         "Today's usage per app"
@@ -136,14 +153,14 @@ fun SettingsScreen(
                 )
                 HorizontalDivider()
                 SettingsRow(
-                    icon     = "🔑",
+                    icon     = Icons.Filled.VpnKey,
                     title    = "Enter unlock key",
                     subtitle = "Apply a signed key to end or extend a lock early",
                     onClick  = onEnterKey,
                 )
                 HorizontalDivider()
                 SettingsRow(
-                    icon     = "🧩",
+                    icon     = Icons.Filled.Extension,
                     title    = "Permissions & setup",
                     subtitle = "Grant, re-check, or repair what protection needs",
                     onClick  = onPermissions,
@@ -152,10 +169,10 @@ fun SettingsScreen(
 
             SettingsSection("Installing & updating") {
                 SettingsRow(
-                    icon     = "📦",
+                    icon     = Icons.Filled.Inventory2,
                     title    = "Sideload notes",
                     subtitle = "Play Protect and restricted settings, in order",
-                    trailing = if (showInstallNotes) "▲" else "▼",
+                    trailing = if (showInstallNotes) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
                     onClick  = { showInstallNotes = !showInstallNotes },
                 )
                 AnimatedVisibility(
@@ -169,10 +186,10 @@ fun SettingsScreen(
 
             SettingsSection("Protection") {
                 SettingsRow(
-                    icon      = "🚪",
+                    icon      = Icons.AutoMirrored.Filled.Logout,
                     title     = "Remove protection",
                     subtitle  = "Deactivate Device Admin so the app can be uninstalled",
-                    titleTint = NeedsAttention,
+                    titleTint = StatusColors.Danger,
                     onClick   = onRemoveProtection,
                 )
             }
@@ -192,7 +209,7 @@ private fun ProtectionSummaryCard(
     extras: List<Pair<String, Boolean>>,
     onOpenSetup: () -> Unit,
 ) {
-    val accent = if (isArmed) GrantedGreen else NeedsAttention
+    val accent = if (isArmed) StatusColors.Success else StatusColors.Danger
     Card(
         modifier  = Modifier
             .fillMaxWidth()
@@ -204,9 +221,10 @@ private fun ProtectionSummaryCard(
     ) {
         Column(Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    if (isArmed) "🛡️" else "⚠️",
-                    style = MaterialTheme.typography.headlineSmall,
+                Icon(
+                    if (isArmed) Icons.Filled.Shield else Icons.Filled.WarningAmber,
+                    contentDescription = null,
+                    tint = accent,
                 )
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
@@ -226,7 +244,7 @@ private fun ProtectionSummaryCard(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                Text("›", style = MaterialTheme.typography.titleLarge, color = accent)
+                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = accent)
             }
 
             Spacer(Modifier.height(12.dp))
@@ -250,23 +268,29 @@ private fun ProtectionSummaryCard(
 @Composable
 private fun CapabilityPill(label: String, granted: Boolean, required: Boolean) {
     val bg = when {
-        granted  -> GrantedGreen.copy(alpha = 0.15f)
-        required -> NeedsAttention.copy(alpha = 0.15f)
+        granted  -> StatusColors.Success.copy(alpha = 0.15f)
+        required -> StatusColors.Danger.copy(alpha = 0.15f)
         else     -> MaterialTheme.colorScheme.surfaceVariant
     }
     val fg = when {
-        granted  -> GrantedGreen
-        required -> NeedsAttention
+        granted  -> StatusColors.Success
+        required -> StatusColors.Danger
         else     -> MaterialTheme.colorScheme.onSurfaceVariant
     }
     Surface(shape = RoundedCornerShape(50), color = bg) {
-        Text(
-            "${if (granted) "✓" else "○"} $label",
-            style      = MaterialTheme.typography.labelSmall,
-            color      = fg,
-            fontWeight = FontWeight.Medium,
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
             modifier   = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-        )
+        ) {
+            Icon(
+                if (granted) Icons.Filled.CheckCircle else Icons.Filled.RadioButtonUnchecked,
+                contentDescription = null,
+                tint = fg,
+                modifier = Modifier.height(12.dp),
+            )
+            Spacer(Modifier.width(4.dp))
+            Text(label, style = MaterialTheme.typography.labelSmall, color = fg, fontWeight = FontWeight.Medium)
+        }
     }
 }
 
@@ -298,10 +322,10 @@ private fun SettingsSection(title: String, content: @Composable () -> Unit) {
 
 @Composable
 private fun SettingsRow(
-    icon: String,
+    icon: ImageVector,
     title: String,
     subtitle: String,
-    trailing: String = "›",
+    trailing: ImageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
     titleTint: Color? = null,
     onClick: () -> Unit,
 ) {
@@ -312,7 +336,7 @@ private fun SettingsRow(
             .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(icon, style = MaterialTheme.typography.titleMedium)
+        Icon(icon, contentDescription = null, tint = titleTint ?: MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
             Text(
@@ -327,11 +351,7 @@ private fun SettingsRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        Text(
-            trailing,
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        Icon(trailing, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 

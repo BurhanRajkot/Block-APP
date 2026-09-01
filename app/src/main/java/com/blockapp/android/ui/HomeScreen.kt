@@ -1,7 +1,7 @@
 package com.blockapp.android.ui
 
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,17 +18,27 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CenterFocusStrong
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.SelfImprovement
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.VpnKey
+import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -49,18 +59,16 @@ import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.blockapp.android.BlockApplication
 import com.blockapp.android.admin.DeviceAdminHelper
 import com.blockapp.android.data.BlockedAppEntity
+import com.blockapp.android.ui.theme.StatusColors
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
-
-// Same status red as the protection banner on OnboardingScreen — "needs attention" is a status,
-// not a brand colour, so it stays literal rather than coming from the colour scheme.
-private val NeedsAttention = Color(0xFFB71C1C)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
     onAddLock: () -> Unit,
+    onFocusMode: () -> Unit,
     onEnterKey: () -> Unit,
     onSettings: () -> Unit,
 ) {
@@ -105,15 +113,19 @@ fun HomeScreen(
             TopAppBar(
                 title = { Text("App Blocker", fontWeight = FontWeight.SemiBold) },
                 actions = {
-                    TextButton(onClick = onEnterKey) { Text("🔑") }
-                    TextButton(onClick = onSettings) { Text("⚙") }
+                    IconButton(onClick = onEnterKey) {
+                        Icon(Icons.Filled.VpnKey, contentDescription = "Enter unlock key")
+                    }
+                    IconButton(onClick = onSettings) {
+                        Icon(Icons.Filled.Settings, contentDescription = "Settings")
+                    }
                 },
             )
         },
         floatingActionButton = {
             ExtendedFloatingActionButton(
                 text = { Text("Lock an app") },
-                icon = { Text("+", style = MaterialTheme.typography.titleLarge) },
+                icon = { Icon(Icons.Filled.Add, contentDescription = null) },
                 onClick = onAddLock,
             )
         },
@@ -134,6 +146,9 @@ fun HomeScreen(
             }
 
             Spacer(Modifier.height(16.dp))
+            FocusModeCard(onClick = onFocusMode)
+
+            Spacer(Modifier.height(20.dp))
             Text(
                 if (locks.isEmpty()) "Active locks" else "Active locks · ${locks.size}",
                 style = MaterialTheme.typography.titleMedium,
@@ -160,6 +175,62 @@ fun HomeScreen(
     }
 }
 
+// ── focus mode hero card ────────────────────────────────────────────────────────
+/**
+ * The front-page entry point for [FocusModeScreen] — locking a whole class of app (social,
+ * entertainment, games) in one tap is the headline feature, so it sits above the active-locks
+ * list rather than being buried in the app picker.
+ */
+@Composable
+private fun FocusModeCard(onClick: () -> Unit) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+    ) {
+        Row(
+            modifier = Modifier.padding(18.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.10f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Filled.CenterFocusStrong,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                )
+            }
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "Focus Mode",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                )
+                Text(
+                    "Lock social, games & entertainment in one tap",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
+                )
+            }
+            Icon(
+                Icons.AutoMirrored.Filled.ArrowForward,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+            )
+        }
+    }
+}
+
 // ── protection banner ──────────────────────────────────────────────────────────
 @Composable
 private fun ProtectionBanner(
@@ -171,15 +242,19 @@ private fun ProtectionBanner(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
-            .background(NeedsAttention)
+            .background(StatusColors.Danger)
             .padding(14.dp),
     ) {
-        Text(
-            "⚠️  Protection incomplete",
-            color = Color.White,
-            style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.Bold,
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Filled.WarningAmber, contentDescription = null, tint = Color.White)
+            Spacer(Modifier.width(8.dp))
+            Text(
+                "Protection incomplete",
+                color = Color.White,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+            )
+        }
         Spacer(Modifier.height(4.dp))
         if (!isAccessibilityActive) {
             Text(
@@ -200,7 +275,7 @@ private fun ProtectionBanner(
             onClick = onFix,
             colors = ButtonDefaults.buttonColors(
                 containerColor = Color.White,
-                contentColor = NeedsAttention,
+                contentColor = StatusColors.Danger,
             ),
             shape = RoundedCornerShape(10.dp),
             modifier = Modifier.fillMaxWidth(),
@@ -227,23 +302,22 @@ private fun LockCard(lock: BlockedAppEntity, now: Long) {
     ) {
         Column(Modifier.padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                if (identity.icon != null) {
-                    Image(
-                        bitmap = identity.icon,
-                        contentDescription = null,
-                        modifier = Modifier
-                            .size(40.dp)
-                            .clip(CircleShape),
-                    )
-                } else {
+                Box {
+                    AppIcon(identity, size = 40)
                     Box(
                         modifier = Modifier
-                            .size(40.dp)
+                            .size(16.dp)
+                            .align(Alignment.BottomEnd)
                             .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)),
+                            .background(StatusColors.Success),
                         contentAlignment = Alignment.Center,
                     ) {
-                        Text("🔒")
+                        Icon(
+                            Icons.Filled.Lock,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(10.dp),
+                        )
                     }
                 }
                 Spacer(Modifier.width(12.dp))
@@ -292,7 +366,20 @@ private fun EmptyState(modifier: Modifier = Modifier) {
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier.padding(bottom = 48.dp),
         ) {
-            Text("🌱", style = MaterialTheme.typography.displaySmall)
+            Box(
+                modifier = Modifier
+                    .size(56.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Filled.SelfImprovement,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(30.dp),
+                )
+            }
             Spacer(Modifier.height(12.dp))
             Text(
                 "Nothing locked right now",

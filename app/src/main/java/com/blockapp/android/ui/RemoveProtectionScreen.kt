@@ -14,14 +14,21 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -32,20 +39,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.blockapp.android.BlockApplication
 import com.blockapp.android.admin.DeviceAdminHelper
 import com.blockapp.android.data.BlockedAppEntity
+import com.blockapp.android.ui.theme.StatusColors
 import kotlinx.coroutines.flow.collectLatest
 
 private const val CONFIRM_PHRASE = "REMOVE"
-
-// Shared status palette — see OnboardingScreen for why these stay literal rather than themed.
-private val DoneGreen    = Color(0xFF2E7D32)
-private val HeadsUpAmber = Color(0xFFB26A00)
-private val DangerRed    = Color(0xFFB71C1C)
 
 /**
  * Deliberately the only sanctioned way to lift Device Admin protection. It calls
@@ -79,7 +83,11 @@ fun RemoveProtectionScreen(onDone: () -> Unit, onEnterKey: () -> Unit) {
         topBar = {
             TopAppBar(
                 title          = { Text("Remove protection", fontWeight = FontWeight.SemiBold) },
-                navigationIcon = { TextButton(onClick = onDone) { Text("←") } },
+                navigationIcon = {
+                    IconButton(onClick = onDone) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
             )
         },
     ) { padding ->
@@ -93,8 +101,8 @@ fun RemoveProtectionScreen(onDone: () -> Unit, onEnterKey: () -> Unit) {
             when {
                 !isAdminActive -> {
                     StatusCard(
-                        tone  = DoneGreen,
-                        icon  = if (justRemoved) "✅" else "ℹ️",
+                        tone  = StatusColors.Success,
+                        icon  = if (justRemoved) Icons.Filled.CheckCircle else Icons.Filled.Info,
                         title = if (justRemoved) {
                             "Device Admin has been removed."
                         } else {
@@ -129,8 +137,8 @@ fun RemoveProtectionScreen(onDone: () -> Unit, onEnterKey: () -> Unit) {
 
                 locks.isNotEmpty() -> {
                     StatusCard(
-                        tone  = HeadsUpAmber,
-                        icon  = "🔒",
+                        tone  = StatusColors.Warning,
+                        icon  = Icons.Filled.Lock,
                         title = "You have ${locks.size} active " +
                             "lock${if (locks.size == 1) "" else "s"}.",
                         body  = "Protection can't be removed while a lock is running — that's " +
@@ -161,8 +169,8 @@ fun RemoveProtectionScreen(onDone: () -> Unit, onEnterKey: () -> Unit) {
 
                 else -> {
                     StatusCard(
-                        tone  = DangerRed,
-                        icon  = "⚠️",
+                        tone  = StatusColors.Danger,
+                        icon  = Icons.Filled.WarningAmber,
                         title = "This turns protection off.",
                         body  = "Device Admin comes off so the app can be uninstalled. It's " +
                             "deliberately not a quick action — that's what stops the app being " +
@@ -207,7 +215,7 @@ fun RemoveProtectionScreen(onDone: () -> Unit, onEnterKey: () -> Unit) {
 }
 
 @Composable
-private fun StatusCard(tone: Color, icon: String, title: String, body: String) {
+private fun StatusCard(tone: Color, icon: ImageVector, title: String, body: String) {
     Row(
         modifier          = Modifier
             .fillMaxWidth()
@@ -215,7 +223,7 @@ private fun StatusCard(tone: Color, icon: String, title: String, body: String) {
             .padding(16.dp),
         verticalAlignment = Alignment.Top,
     ) {
-        Text(icon, style = MaterialTheme.typography.titleMedium)
+        Icon(icon, contentDescription = null, tint = tone)
         Spacer(Modifier.width(12.dp))
         Column {
             Text(

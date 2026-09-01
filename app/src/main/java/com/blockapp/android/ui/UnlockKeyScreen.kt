@@ -12,13 +12,20 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Block
+import androidx.compose.material.icons.filled.HourglassTop
+import androidx.compose.material.icons.filled.LockOpen
+import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -29,21 +36,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.blockapp.android.BlockApplication
 import com.blockapp.android.keys.KeyVerificationResult
 import com.blockapp.android.keys.KeyVerifier
+import com.blockapp.android.ui.theme.StatusColors
 import kotlinx.coroutines.launch
 
-// Shared status palette — see OnboardingScreen for why these stay literal rather than themed.
-private val AppliedGreen   = Color(0xFF2E7D32)
-private val RejectedRed    = Color(0xFFB71C1C)
-private val HeadsUpAmber   = Color(0xFFB26A00)
-
 /** What to tell the user after a key was submitted, and how loudly. */
-private data class KeyOutcome(val tone: Color, val icon: String, val title: String, val detail: String)
+private data class KeyOutcome(val tone: Color, val icon: ImageVector, val title: String, val detail: String)
 
 /**
  * Applies an offline-signed unlock key (see keys/KeyVerifier.kt and keygen/generate_key.py).
@@ -67,7 +71,11 @@ fun UnlockKeyScreen(onBack: () -> Unit) {
         topBar = {
             TopAppBar(
                 title          = { Text("Unlock key", fontWeight = FontWeight.SemiBold) },
-                navigationIcon = { TextButton(onClick = onBack) { Text("←") } },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
             )
         },
     ) { padding ->
@@ -124,16 +132,16 @@ fun UnlockKeyScreen(onBack: () -> Unit) {
                                 )
                                 outcome = when {
                                     !applied -> KeyOutcome(
-                                        tone   = RejectedRed,
-                                        icon   = "⛔",
+                                        tone   = StatusColors.Danger,
+                                        icon   = Icons.Filled.Block,
                                         title  = "Already used",
                                         detail = "This key was applied before. Keys are " +
                                             "single-use by design — generate a new one on " +
                                             "your PC.",
                                     )
                                     !hadLock -> KeyOutcome(
-                                        tone   = HeadsUpAmber,
-                                        icon   = "⚠️",
+                                        tone   = StatusColors.Warning,
+                                        icon   = Icons.Filled.WarningAmber,
                                         title  = "Nothing to unlock",
                                         detail = "The key is valid, but " +
                                             targetLabel(payload.targetPackage) +
@@ -141,16 +149,16 @@ fun UnlockKeyScreen(onBack: () -> Unit) {
                                             "regardless — mint a fresh one if you still need it.",
                                     )
                                     payload.newUntil > System.currentTimeMillis() -> KeyOutcome(
-                                        tone   = AppliedGreen,
-                                        icon   = "⏳",
+                                        tone   = StatusColors.Success,
+                                        icon   = Icons.Filled.HourglassTop,
                                         title  = "Lock extended",
                                         detail = targetLabel(payload.targetPackage) +
                                             " now unlocks at " +
                                             "${formatUnlockAt(payload.newUntil)}.",
                                     )
                                     else -> KeyOutcome(
-                                        tone   = AppliedGreen,
-                                        icon   = "🔓",
+                                        tone   = StatusColors.Success,
+                                        icon   = Icons.Filled.LockOpen,
                                         title  = "Unlocked",
                                         detail = targetLabel(payload.targetPackage) +
                                             " can be opened again.",
@@ -160,8 +168,8 @@ fun UnlockKeyScreen(onBack: () -> Unit) {
                             }
                         }
                         KeyVerificationResult.Invalid -> outcome = KeyOutcome(
-                            tone   = RejectedRed,
-                            icon   = "⛔",
+                            tone   = StatusColors.Danger,
+                            icon   = Icons.Filled.Block,
                             title  = "Not a valid key",
                             detail = "The signature didn't check out. Copy the whole line the " +
                                 "script printed, including the dot in the middle.",
@@ -204,7 +212,7 @@ private fun OutcomeCard(outcome: KeyOutcome) {
             .padding(14.dp),
         verticalAlignment = Alignment.Top,
     ) {
-        Text(outcome.icon, style = MaterialTheme.typography.titleMedium)
+        Icon(outcome.icon, contentDescription = null, tint = outcome.tone)
         Spacer(Modifier.width(12.dp))
         Column {
             Text(

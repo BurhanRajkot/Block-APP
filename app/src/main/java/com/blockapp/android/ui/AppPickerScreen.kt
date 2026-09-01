@@ -1,14 +1,11 @@
 package com.blockapp.android.ui
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -16,21 +13,22 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -47,21 +45,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.blockapp.android.BlockApplication
+import com.blockapp.android.ui.theme.StatusColors
 import com.blockapp.android.util.InstalledAppsProvider
 import com.blockapp.android.util.LaunchableApp
 import kotlinx.coroutines.flow.collectLatest
-
-// Same status green as OnboardingScreen and SettingsScreen — a running lock is a "this is on"
-// state, so it reads with the same colour as a granted permission rather than as a warning.
-private val LockedGreen = Color(0xFF2E7D32)
 
 /**
  * Two steps in one composable: pick an app, then choose how long. Split by the local [selected]
@@ -137,7 +130,11 @@ private fun AppList(
         topBar = {
             TopAppBar(
                 title          = { Text("Lock an app", fontWeight = FontWeight.SemiBold) },
-                navigationIcon = { TextButton(onClick = onBack) { Text("←") } },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
             )
         },
     ) { padding ->
@@ -210,21 +207,32 @@ private fun AppRow(launchable: LaunchableApp, isLocked: Boolean, onClick: () -> 
         )
         if (isLocked) {
             Spacer(Modifier.width(8.dp))
-            Surface(shape = RoundedCornerShape(50), color = LockedGreen.copy(alpha = 0.15f)) {
-                Text(
-                    "🔒 Locked",
-                    style      = MaterialTheme.typography.labelSmall,
-                    color      = LockedGreen,
-                    fontWeight = FontWeight.Bold,
-                    modifier   = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                )
+            Surface(shape = RoundedCornerShape(50), color = StatusColors.Success.copy(alpha = 0.15f)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                ) {
+                    Icon(
+                        Icons.Filled.Lock,
+                        contentDescription = null,
+                        tint = StatusColors.Success,
+                        modifier = Modifier.height(12.dp),
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        "Locked",
+                        style      = MaterialTheme.typography.labelSmall,
+                        color      = StatusColors.Success,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
             }
         }
     }
 }
 
 // ── step 2: choose a duration ──────────────────────────────────────────────────
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun DurationStep(
     target: LaunchableApp,
@@ -247,10 +255,7 @@ private fun DurationStep(
     // Home, undoing their selection with no way back short of starting over.
     BackHandler { onBack() }
 
-    val customMs = (hoursText.toLongOrNull() ?: 0L) * 3_600_000L +
-        (minutesText.toLongOrNull() ?: 0L) * 60_000L +
-        (secondsText.toLongOrNull() ?: 0L) * 1_000L
-    val durationMs = if (isCustom) customMs else (presetMs ?: 0L)
+    val durationMs = resolveDurationMs(isCustom, presetMs, hoursText, minutesText, secondsText)
 
     // An already-locked app counts its new duration from the current unlock time, not from now.
     // Counting from now would let "1h" on a lock with 2h left resolve to no change at all
@@ -268,7 +273,11 @@ private fun DurationStep(
                         fontWeight = FontWeight.SemiBold,
                     )
                 },
-                navigationIcon = { TextButton(onClick = onBack) { Text("←") } },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
             )
         },
     ) { padding ->
@@ -325,37 +334,18 @@ private fun DurationStep(
             )
             Spacer(Modifier.height(8.dp))
 
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                PRESETS.forEach { (label, ms) ->
-                    FilterChip(
-                        selected = !isCustom && presetMs == ms,
-                        onClick  = {
-                            isCustom = false
-                            presetMs = ms
-                        },
-                        label    = { Text(label) },
-                    )
-                }
-                FilterChip(
-                    selected = isCustom,
-                    onClick  = {
-                        isCustom = true
-                        presetMs = null
-                    },
-                    label    = { Text("Custom") },
-                )
-            }
-
-            if (isCustom) {
-                Spacer(Modifier.height(12.dp))
-                Row(Modifier.fillMaxWidth()) {
-                    DurationField(hoursText, { hoursText = it }, "Hours", 3, Modifier.weight(1f))
-                    Spacer(Modifier.width(8.dp))
-                    DurationField(minutesText, { minutesText = it }, "Min", 2, Modifier.weight(1f))
-                    Spacer(Modifier.width(8.dp))
-                    DurationField(secondsText, { secondsText = it }, "Sec", 2, Modifier.weight(1f))
-                }
-            }
+            DurationPresetPicker(
+                presetMs         = presetMs,
+                isCustom         = isCustom,
+                onPresetSelected = { isCustom = false; presetMs = it },
+                onCustomSelected = { isCustom = true; presetMs = null },
+                hoursText        = hoursText,
+                onHoursChange    = { hoursText = it },
+                minutesText      = minutesText,
+                onMinutesChange  = { minutesText = it },
+                secondsText      = secondsText,
+                onSecondsChange  = { secondsText = it },
+            )
 
             Spacer(Modifier.height(20.dp))
 
@@ -460,59 +450,3 @@ private fun ConfirmLockDialog(
         dismissButton    = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
-
-@Composable
-private fun DurationField(
-    value: String,
-    onValueChange: (String) -> Unit,
-    label: String,
-    maxLength: Int,
-    modifier: Modifier = Modifier,
-) {
-    OutlinedTextField(
-        value           = value,
-        onValueChange   = { onValueChange(it.filter(Char::isDigit).take(maxLength)) },
-        label           = { Text(label) },
-        singleLine      = true,
-        shape           = RoundedCornerShape(12.dp),
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-        modifier        = modifier,
-    )
-}
-
-@Composable
-private fun AppIcon(identity: AppIdentity, size: Int) {
-    if (identity.icon != null) {
-        Image(
-            bitmap             = identity.icon,
-            contentDescription = null,
-            modifier           = Modifier
-                .size(size.dp)
-                .clip(CircleShape),
-        )
-    } else {
-        Box(
-            modifier         = Modifier
-                .size(size.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text("📱")
-        }
-    }
-}
-
-/**
- * Covers the durations actually reached for, so the common case is one tap instead of three
- * number fields. Custom stays available because sub-minute durations are the only practical way
- * to rehearse the expiry path on a real device (see the verification walkthrough in CLAUDE.md).
- */
-private val PRESETS = listOf(
-    "15m" to 15 * 60_000L,
-    "30m" to 30 * 60_000L,
-    "1h" to 60 * 60_000L,
-    "2h" to 2 * 60 * 60_000L,
-    "4h" to 4 * 60 * 60_000L,
-    "8h" to 8 * 60 * 60_000L,
-)

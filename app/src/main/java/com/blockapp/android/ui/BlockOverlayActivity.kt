@@ -21,14 +21,16 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -47,6 +49,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.blockapp.android.BlockApplication
 import com.blockapp.android.MainActivity
+import com.blockapp.android.ui.theme.BlockAppTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -56,7 +59,7 @@ import kotlinx.coroutines.launch
 // the user has hit, not as another page of the app they can interact their way out of. Matches
 // the dark window theme set on this activity in the manifest, so there's no flash on launch.
 private val WallBackground = Color(0xFF101014)
-private val WallAccent     = Color(0xFF8AB4F8)
+private val WallAccent     = Color(0xFFB4B8FF)
 private val WallTrack      = Color(0xFF2A2A33)
 
 /**
@@ -86,7 +89,7 @@ class BlockOverlayActivity : ComponentActivity() {
         onBackPressedDispatcher.addCallback(this) { goHome() }
 
         setContent {
-            MaterialTheme(colorScheme = darkColorScheme()) {
+            BlockAppTheme(darkTheme = true) {
                 Surface(color = WallBackground) {
                     BlockOverlayContent(
                         packageName = packageNameState,
@@ -236,7 +239,12 @@ private fun BlockOverlayContent(
                             .clip(CircleShape),
                     )
                 } else {
-                    Text("🔒", style = MaterialTheme.typography.displaySmall)
+                    Icon(
+                        Icons.Filled.Lock,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(40.dp),
+                    )
                 }
                 Spacer(Modifier.height(10.dp))
                 Text(
