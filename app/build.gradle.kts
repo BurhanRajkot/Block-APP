@@ -43,6 +43,11 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
+    // Material3's Icon composable just renders an ImageVector, so the icon glyphs from the
+    // Material 2 icon library are the standard source for them in a Material3 app — there is no
+    // separate material3-icons-extended artifact. Needed for real vector icons (lock, shield,
+    // key, etc.) in place of emoji-as-icon text.
+    implementation("androidx.compose.material:material-icons-extended")
     debugImplementation("androidx.compose.ui:ui-tooling")
 
     implementation("androidx.core:core-ktx:1.13.1")
