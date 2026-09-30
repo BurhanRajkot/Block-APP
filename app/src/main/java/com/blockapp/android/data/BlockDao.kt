@@ -35,4 +35,15 @@ interface BlockDao {
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun markNonceUsed(entity: UsedNonceEntity)
+
+    @Query("SELECT * FROM reel_counts WHERE day = :day ORDER BY reels DESC")
+    fun observeReelCounts(day: String): Flow<List<ReelCountEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertReelCountIfAbsent(entity: ReelCountEntity)
+
+    @Query(
+        "UPDATE reel_counts SET reels = reels + :count WHERE day = :day AND packageName = :packageName",
+    )
+    suspend fun incrementReelCount(day: String, packageName: String, count: Int)
 }

@@ -51,6 +51,8 @@ private data class KeyOutcome(val tone: Color, val icon: ImageVector, val title:
 
 /**
  * Applies an offline-signed unlock key (see keys/KeyVerifier.kt and keygen/generate_key.py).
+ * Not listed in the visible Settings/Home UI — reached by tapping the version line in Settings
+ * seven times, which is how a key gets pasted after someone asks for one.
  *
  * Every submission ends in an explicit, named outcome rather than a silent navigation. A key is
  * single-use — the nonce is burned the moment it verifies, whether or not it found a lock to act

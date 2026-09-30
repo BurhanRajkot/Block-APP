@@ -2,9 +2,11 @@ package com.blockapp.android.accessibility
 
 import android.accessibilityservice.AccessibilityService
 import android.content.Intent
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.view.accessibility.AccessibilityEvent
+import android.view.inputmethod.InputMethodManager
 import android.widget.Toast
 import com.blockapp.android.BlockApplication
 import com.blockapp.android.R
@@ -43,12 +45,20 @@ import kotlinx.coroutines.runBlocking
  * Device Admin deactivation itself already goes through a system confirmation dialog with our
  * own warning text (see BlockDeviceAdminReceiver) -- the guard here stops reaching that
  * dialog at all.
+ *
+ * Separately from both tiers, TYPE_VIEW_SCROLLED events feed [ReelScrollDetector], which counts
+ * short-form videos watched per app for the counter on HomeScreen, and [ReelBubble], which
+ * floats today's total beside the camera while a reel viewer is open. Both only observe and
+ * never act on the foreground app, so they have no bearing on enforcement.
  */
 class AppBlockAccessibilityService : AccessibilityService() {
 
     private val handler = Handler(Looper.getMainLooper())
     private var serviceScope: CoroutineScope? = null
     private var watchdogScheduled = false
+    private var reelDetector: ReelScrollDetector? = null
+    private var reelBubble: ReelBubble? = null
+    private var bubbleTransientPackages: Set<String> = emptySet()
 
     /**
      * Backstop against missed events. onAccessibilityEvent only fires when the system decides
@@ -95,6 +105,23 @@ class AppBlockAccessibilityService : AccessibilityService() {
 
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
         serviceScope = scope
+
+        // The detector needs scrollDeltaY, which AccessibilityEvent only gained in API 28 (P).
+        // Below that the counter simply stays at zero, and HomeScreen says why.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            val bubble = ReelBubble(this, app.repository, scope)
+            reelBubble = bubble
+            bubbleTransientPackages = bubbleTransientPackages()
+            reelDetector = ReelScrollDetector(
+                handler = handler,
+                ignoredPackages = reelIgnoredPackages(),
+                onReelsWatched = { pkg, count ->
+                    app.repository.addReelsWatched(pkg, count)
+                    bubble.show(pkg)
+                },
+                onFeedScrolled = { pkg -> if (bubble.shownFor == pkg) bubble.hide() },
+            )
+        }
         scope.launch {
             app.repository.activeLocks.collect { locks ->
                 if (locks.isNotEmpty()) {
@@ -113,15 +140,28 @@ class AppBlockAccessibilityService : AccessibilityService() {
     override fun onUnbind(intent: Intent?): Boolean {
         handler.removeCallbacks(watchdog)
         watchdogScheduled = false
+        reelDetector?.cancel()
+        reelDetector = null
+        reelBubble?.hide()
+        reelBubble = null
         serviceScope?.cancel()
         serviceScope = null
         return super.onUnbind(intent)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        if (event?.eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                val metrics = resources.displayMetrics
+                reelDetector?.onScrolled(event, metrics.widthPixels, metrics.heightPixels)
+            }
+            return
+        }
         if (event?.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
         val eventPackage = event.packageName?.toString() ?: return
         val className = event.className?.toString().orEmpty()
+
+        hideBubbleIfLeft(eventPackage, className)
 
         // Tier 1: guard our own protective system screens, but only once Device Admin is
         // active — otherwise this would block the setup flow itself (see class doc above).
@@ -220,11 +260,54 @@ class AppBlockAccessibilityService : AccessibilityService() {
         startActivity(overlayIntent)
     }
 
+    /**
+     * Takes the reel bubble down once a different app comes to the front, so it doesn't sit on
+     * top of whatever the user switched to. Runs before Tier 1/2 so a bounce home also clears
+     * it.
+     */
+    private fun hideBubbleIfLeft(eventPackage: String, className: String) {
+        val bubble = reelBubble ?: return
+        val shownFor = bubble.shownFor ?: return
+        if (eventPackage == shownFor || eventPackage in bubbleTransientPackages) return
+        // Our own non-activity windows (the bubble itself, the Tier 1 toast) may report as this
+        // package. Treating them as a switch would hide the bubble the moment it appears.
+        if (eventPackage == packageName && !className.startsWith("$packageName.")) return
+        bubble.hide()
+    }
+
+    /**
+     * Windows that open on top of the reel viewer without the user leaving it: the
+     * notification shade and the keyboard (typing a comment). Hiding for those would make
+     * the bubble flicker away every time either appears.
+     */
+    private fun bubbleTransientPackages(): Set<String> {
+        val keyboards = getSystemService(InputMethodManager::class.java)
+            ?.inputMethodList
+            ?.map { it.packageName }
+            .orEmpty()
+        return keyboards.toSet() + SYSTEM_UI_PACKAGE
+    }
+
+    /**
+     * Packages whose full-screen scrollers are never reels. The launcher's home pages and app
+     * drawer fill the screen and snap, so they would otherwise look like a pager. System UI is the
+     * notification shade. This app and the protected system packages are excluded as well, since
+     * nothing in them is short-form video.
+     */
+    private fun reelIgnoredPackages(): Set<String> {
+        val home = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+        val launchers = packageManager.queryIntentActivities(home, 0)
+            .map { it.activityInfo.packageName }
+        return launchers.toSet() + ProtectedPackages.ALL + packageName + SYSTEM_UI_PACKAGE
+    }
+
     override fun onInterrupt() {}
 
     private companion object {
         /** How often the watchdog re-checks the foreground app against active locks. */
         const val WATCHDOG_INTERVAL_MS = 200L
+
+        const val SYSTEM_UI_PACKAGE = "com.android.systemui"
 
         /** Matches any Accessibility-settings activity across OEMs. */
         val ACCESSIBILITY_CLASS_HINTS = listOf(

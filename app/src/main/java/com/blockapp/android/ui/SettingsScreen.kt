@@ -35,7 +35,6 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.Shield
-import androidx.compose.material.icons.filled.VpnKey
 import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -49,6 +48,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -68,7 +68,9 @@ import com.blockapp.android.usage.UsageStatsProvider
 
 /**
  * The app's one hub for everything that isn't "lock an app": protection status, setup, screen
- * time, unlock keys and removal.
+ * time, and removal. Unlock-key paste is not listed here — that screen is reached only by
+ * tapping the version line seven times, so an impulsive user looking for an in-app unlock
+ * doesn't find one. The verifier itself is unchanged.
  *
  * Note for invariant 1 (the escape hatch must always work): this screen is one tap from
  * HomeScreen and "Remove protection" is a top-level row on it, so a user who has locked
@@ -93,6 +95,7 @@ fun SettingsScreen(
     var hasNotifications       by remember { mutableStateOf(false) }
     var hasUsageAccess         by remember { mutableStateOf(false) }
     var showInstallNotes       by remember { mutableStateOf(false) }
+    var versionTaps            by remember { mutableStateOf(0) }
 
     // Every one of these can be revoked while the app sits in the background, so they're re-read
     // on resume rather than sampled once — same reason HomeScreen re-checks its banner state.
@@ -114,10 +117,19 @@ fun SettingsScreen(
         "Usage access" to hasUsageAccess,
     )
 
+    // Seven taps on the version line open UnlockKeyScreen. The count resets after a pause so
+    // ordinary scrolling over the footer can't wander into it.
+    LaunchedEffect(versionTaps) {
+        if (versionTaps == 0) return@LaunchedEffect
+        kotlinx.coroutines.delay(2_000L)
+        versionTaps = 0
+    }
+
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
-                title = { Text("Settings", fontWeight = FontWeight.SemiBold) },
+                title = { Text("Settings") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
@@ -150,13 +162,6 @@ fun SettingsScreen(
                         "Needs usage access — grant it in Setup"
                     },
                     onClick   = onScreenTime,
-                )
-                HorizontalDivider()
-                SettingsRow(
-                    icon     = Icons.Filled.VpnKey,
-                    title    = "Enter unlock key",
-                    subtitle = "Apply a signed key to end or extend a lock early",
-                    onClick  = onEnterKey,
                 )
                 HorizontalDivider()
                 SettingsRow(
@@ -194,7 +199,18 @@ fun SettingsScreen(
                 )
             }
 
-            AboutFooter(versionName = remember { versionName(context) })
+            AboutFooter(
+                versionName = remember { versionName(context) },
+                onVersionTap = {
+                    val next = versionTaps + 1
+                    if (next >= 7) {
+                        versionTaps = 0
+                        onEnterKey()
+                    } else {
+                        versionTaps = next
+                    }
+                },
+            )
         }
     }
 }
@@ -435,7 +451,7 @@ private fun NoteBlock(heading: String, lines: List<String>) {
 
 // ── about ──────────────────────────────────────────────────────────────────────
 @Composable
-private fun AboutFooter(versionName: String) {
+private fun AboutFooter(versionName: String, onVersionTap: () -> Unit) {
     Column(
         modifier            = Modifier
             .fillMaxWidth()
@@ -447,6 +463,7 @@ private fun AboutFooter(versionName: String) {
             style      = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.Bold,
             color      = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier   = Modifier.clickable(onClick = onVersionTap),
         )
         Spacer(Modifier.height(6.dp))
         // Deliberately not overstated: the README and the code comments make the same claim, and
@@ -460,7 +477,7 @@ private fun AboutFooter(versionName: String) {
         )
         Spacer(Modifier.height(8.dp))
         Text(
-            "No network permission is declared. Unlock keys are verified offline, on-device.",
+            "No network. Locks end when the timer does, or when you get in touch.",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

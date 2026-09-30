@@ -105,6 +105,21 @@ Tier 1 is gated on Device Admin already being active, and that gate is load-bear
 must be enabled *before* Device Admin can be activated, so an unconditional Tier 1 would bounce the
 user out of the Device Admin activation screen and make setup impossible to complete.
 
+**Reel counter (observe-only).** The same service also receives `typeViewScrolled` and hands it
+to `ReelScrollDetector`, which counts short-form videos per app per day into `reel_counts` for the
+counter on `HomeScreen`. It has no per-app view-ID list. It recognises a full-screen vertical
+pager by bursts that land exactly on whole container heights, and trusts a container only after
+two such bursts in a row. It never acts on the foreground app and must stay that way; an
+exception from it must not reach the service (see `BlockRepository.addReelsWatched`). Requires
+API 28 (`scrollDeltaY`).
+
+`ReelBubble` is its on-screen half: a tiny `TYPE_ACCESSIBILITY_OVERLAY` pill beside the camera
+cutout showing today's total. It's shown on each counted reel and hidden on a feed-like scroll
+(`onFeedScrolled`) or when another app comes to the front. It needs no `SYSTEM_ALERT_WINDOW`,
+but only through the service's own `WindowManager`, and it must stay `FLAG_NOT_TOUCHABLE`
+because it sits over other apps' top bars. Its WindowManager calls are guarded for the same
+reason as the detector.
+
 **The only sanctioned way out** is `RemoveProtectionScreen`, which calls
 `DeviceAdminHelper.removeAdmin()` in-process — an app may always drop its own admin without
 touching Settings UI, so this path never needs the screens Tier 1 blocks.
@@ -167,10 +182,12 @@ Ordered by how bad it is to get wrong. The first one can force a factory reset.
    can start and stop the service faster than Android's start-up handshake completes, which kills
    the whole process with `ForegroundServiceDidNotStartInTimeException`. This was hit in practice
    at cold start when a stale expired lock flipped the flow non-empty→empty within milliseconds.
-7. **A Room schema change needs a version bump and a migration.** `AppDatabase` is `version = 1`
+7. **A Room schema change needs a version bump and a migration.** `AppDatabase` is `version = 2`
    with `exportSchema = false` and **no** `fallbackToDestructiveMigration()`, so shipping a changed
    schema without a migration throws at open — and on this app, a DB that won't open means
-   `activeLocks` never populates and enforcement silently stops.
+   `activeLocks` never populates and enforcement silently stops. Migrations are hand-written SQL;
+   copy the `CREATE TABLE` from `createAllTables` in the generated `AppDatabase_Impl` rather than
+   writing it by hand, since Room validates the result column for column.
 8. **Don't add the `INTERNET` permission.** The manifest declares no network permission at all;
    key verification is entirely offline and local. Zero network reach is a deliberate property of
    the design, not an omission.

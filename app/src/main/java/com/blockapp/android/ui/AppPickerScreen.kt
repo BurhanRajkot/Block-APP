@@ -394,8 +394,7 @@ private fun DurationStep(
 
             Spacer(Modifier.height(12.dp))
             Text(
-                "Once it starts there is no in-app way to end it early — only an unlock key " +
-                    "generated on your PC can cut it short.",
+                "Once it starts there is no in-app way to end it early.",
                 style     = MaterialTheme.typography.labelSmall,
                 color     = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,

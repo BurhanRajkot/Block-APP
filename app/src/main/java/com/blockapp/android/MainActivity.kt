@@ -107,7 +107,6 @@ private fun AppRoot() {
             Screen.Home -> HomeScreen(
                 onAddLock = { screen = Screen.AppPicker },
                 onFocusMode = { screen = Screen.FocusMode },
-                onEnterKey = { screen = Screen.UnlockKey },
                 onSettings = { screen = Screen.Settings },
             )
             Screen.Settings -> SettingsScreen(
@@ -133,7 +132,6 @@ private fun AppRoot() {
             )
             Screen.RemoveProtection -> RemoveProtectionScreen(
                 onDone = { screen = Screen.Home },
-                onEnterKey = { screen = Screen.UnlockKey },
             )
             Screen.ScreenTime -> ScreenTimeScreen(onBack = { screen = Screen.Settings })
         }

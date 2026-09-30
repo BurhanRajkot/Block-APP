@@ -5,8 +5,8 @@
          flashing before the first Compose frame lands, matching whichever mode the Compose
          theme resolves to. -->
     <style name="Theme.BlockApp" parent="android:Theme.Material.Light.NoActionBar">
-        <item name="android:windowBackground">#FAFAFC</item>
-        <item name="android:statusBarColor">#FAFAFC</item>
-        <item name="android:navigationBarColor">#FAFAFC</item>
+        <item name="android:windowBackground">#F3EDE3</item>
+        <item name="android:statusBarColor">#F3EDE3</item>
+        <item name="android:navigationBarColor">#F3EDE3</item>
     </style>
 </resources>

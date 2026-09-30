@@ -86,7 +86,12 @@ object FocusModeApps {
         ApplicationInfo.CATEGORY_VIDEO,
     )
 
-    private fun isTarget(context: Context, packageName: String): Boolean {
+    /**
+     * Whether auto-detect would include [packageName] *before* any user include/exclude from
+     * [FocusModeSelection]. Kept public so the selection store can treat extras as a delta
+     * against this, not a frozen snapshot of last launch's list.
+     */
+    fun isSuggested(context: Context, packageName: String): Boolean {
         if (packageName in EXCLUDED) return false
         if (packageName in KNOWN_PACKAGES) return true
         return try {
@@ -97,12 +102,13 @@ object FocusModeApps {
     }
 
     /**
-     * Installed, launchable apps Focus Mode would lock right now. Built on
+     * Installed, launchable apps Focus Mode would lock with no user edits. Built on
      * [InstalledAppsProvider.listLaunchableApps], which already excludes this app itself and
      * every [ProtectedPackages] entry, so Focus Mode inherits that backstop instead of
-     * re-implementing it.
+     * re-implementing it. The screen the user actually starts from is [FocusModeSelection.resolve],
+     * which layers extras and excludes on top of this.
      */
     fun findTargets(context: Context): List<LaunchableApp> =
         InstalledAppsProvider.listLaunchableApps(context)
-            .filter { isTarget(context, it.packageName) }
+            .filter { isSuggested(context, it.packageName) }
 }

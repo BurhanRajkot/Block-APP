@@ -66,7 +66,7 @@ private const val CONFIRM_PHRASE = "REMOVE"
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun RemoveProtectionScreen(onDone: () -> Unit, onEnterKey: () -> Unit) {
+fun RemoveProtectionScreen(onDone: () -> Unit) {
     val context = LocalContext.current
     val app = context.applicationContext as BlockApplication
 
@@ -142,22 +142,14 @@ fun RemoveProtectionScreen(onDone: () -> Unit, onEnterKey: () -> Unit) {
                         title = "You have ${locks.size} active " +
                             "lock${if (locks.size == 1) "" else "s"}.",
                         body  = "Protection can't be removed while a lock is running — that's " +
-                            "the entire point of it. End your locks first, either by waiting " +
-                            "them out or applying an unlock key, then come back here.",
+                            "the entire point of it. Wait the locks out, or get in touch if you " +
+                            "need them lifted early, then come back here.",
                     )
                     Spacer(Modifier.height(12.dp))
                     locks.forEach { lock ->
                         LockLine(lock)
                     }
                     Spacer(Modifier.height(16.dp))
-                    Button(
-                        onClick  = onEnterKey,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(52.dp),
-                        shape    = RoundedCornerShape(14.dp),
-                    ) { Text("Enter unlock key", fontWeight = FontWeight.SemiBold) }
-                    Spacer(Modifier.height(8.dp))
                     OutlinedButton(
                         onClick  = onDone,
                         modifier = Modifier.fillMaxWidth(),

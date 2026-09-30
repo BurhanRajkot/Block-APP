@@ -1,6 +1,7 @@
 package com.blockapp.android.data
 
 import android.content.Context
+import android.database.sqlite.SQLiteException
 import com.blockapp.android.alarm.AlarmScheduler
 import com.blockapp.android.util.ProtectedPackages
 import kotlinx.coroutines.CoroutineScope
@@ -8,8 +9,10 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
+import java.time.LocalDate
 
 /**
  * Single read/write entry point for lock state, used by the UI, the accessibility service,
@@ -98,6 +101,35 @@ class BlockRepository(
     }
 
     suspend fun getActiveOnce(): List<BlockedAppEntity> = dao.getActiveOnce()
+
+    /** Per-app reel counts for [day], most-watched first. */
+    fun observeReelCounts(day: LocalDate): Flow<List<ReelCountEntity>> =
+        dao.observeReelCounts(day.toString())
+
+    /** Today's reels across every app, for the floating ReelBubble. */
+    fun observeReelTotal(day: LocalDate): Flow<Int> =
+        observeReelCounts(day).map { counts -> counts.sumOf { it.reels } }
+
+    /**
+     * Adds [count] reels to today's tally for [packageName]. Called from the accessibility
+     * service's main thread, so the write is launched rather than awaited.
+     *
+     * A failed write is dropped rather than rethrown. [scope] has no exception handler, so an
+     * uncaught SQLiteException here (disk full, DB locked) would take the whole process down —
+     * and with it the accessibility service and every running lock — over a statistic.
+     * Losing a few counted reels is the right trade (CLAUDE.md invariant 9).
+     */
+    fun addReelsWatched(packageName: String, count: Int) {
+        val day = LocalDate.now().toString()
+        scope.launch {
+            try {
+                dao.insertReelCountIfAbsent(ReelCountEntity(day, packageName, reels = 0))
+                dao.incrementReelCount(day, packageName, count)
+            } catch (e: SQLiteException) {
+                // Dropped on purpose; see KDoc.
+            }
+        }
+    }
 
     /** Returns false only when the key's nonce was already used (replay). */
     suspend fun applyUnlockKey(targetPackage: String, newUntil: Long, nonce: String): Boolean {

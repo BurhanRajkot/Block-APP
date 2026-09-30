@@ -62,6 +62,30 @@ Home screen → **+** → pick an app → enter a duration in hours → "Lock it
 the active list on its own once the timer expires (handled by an exact alarm, re-armed on
 reboot).
 
+## Reels counter
+
+The top of the Home screen shows how many short-form videos (Reels, Shorts, TikToks, …) you've
+swiped through today, with the top few apps underneath. It reads scroll events from the same
+Accessibility Service, only counts, never blocks anything, and stays on the phone like
+everything else.
+
+It works on Android 9+ and has no per-app list. Instead it recognises a full-screen vertical
+pager, one that always comes to rest exactly one screen-height per swipe, and only starts
+counting after two such swipes in a row. That keeps ordinary feed scrolling out of the count,
+and the trade-off is that it undercounts rather than overcounts:
+
+- A session of just one or two reels never gets confirmed, so it isn't counted.
+- Rewatching (swiping back, then forward again) doesn't count a reel twice.
+- A viewer whose pages don't fill the container (peeking previews), or a Compose app that
+  doesn't report scroll distances, won't be counted at all.
+
+Treat it as a rough daily signal, not an exact tally.
+
+While you're in a reel viewer, the same total also floats in a tiny bubble at the top of the
+screen, just right of the front camera, and hops each time it goes up. It disappears when you
+leave for another app or scroll the app's normal feed. It can't be tapped, so it never gets in
+the way of the app underneath.
+
 ## Generating an unlock key
 
 From your PC, once `keygen/keys/private_key.pem` exists:

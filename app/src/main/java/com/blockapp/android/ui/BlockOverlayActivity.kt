@@ -59,7 +59,7 @@ import kotlinx.coroutines.launch
 // the user has hit, not as another page of the app they can interact their way out of. Matches
 // the dark window theme set on this activity in the manifest, so there's no flash on launch.
 private val WallBackground = Color(0xFF101014)
-private val WallAccent     = Color(0xFFB4B8FF)
+private val WallAccent     = Color(0xFFE2A07A)
 private val WallTrack      = Color(0xFF2A2A33)
 
 /**
@@ -287,8 +287,7 @@ private fun BlockOverlayContent(
                 .padding(horizontal = 16.dp, vertical = 12.dp),
         ) {
             Text(
-                "You set this yourself. It can't be shortened from here — wait it out, or apply " +
-                    "an unlock key from App Blocker.",
+                "You set this yourself. It can't be shortened from here — wait it out.",
                 style     = MaterialTheme.typography.bodySmall,
                 color     = Color.White.copy(alpha = 0.6f),
                 textAlign = TextAlign.Center,
