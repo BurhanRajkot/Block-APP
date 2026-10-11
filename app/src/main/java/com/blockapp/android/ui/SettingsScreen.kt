@@ -13,40 +13,34 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.Logout
-import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.WarningAmber
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material.icons.outlined.Extension
+import androidx.compose.material.icons.outlined.Insights
+import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -72,17 +66,15 @@ import com.blockapp.android.usage.UsageStatsProvider
  * tapping the version line seven times, so an impulsive user looking for an in-app unlock
  * doesn't find one. The verifier itself is unchanged.
  *
- * Note for invariant 1 (the escape hatch must always work): this screen is one tap from
- * HomeScreen and "Remove protection" is a top-level row on it, so a user who has locked
- * themselves out of Settings' Accessibility and Device Admin screens still reaches
+ * Note for invariant 1 (the escape hatch must always work): this screen is a bottom-bar tab,
+ * one tap from HomeScreen, and "Remove protection" is a top-level row on it, so a user who has
+ * locked themselves out of Settings' Accessibility and Device Admin screens still reaches
  * RemoveProtectionScreen in two taps from launch. Don't bury that row behind an expander.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
-    onBack: () -> Unit,
     onPermissions: () -> Unit,
-    onScreenTime: () -> Unit,
+    onInsights: () -> Unit,
     onEnterKey: () -> Unit,
     onRemoveProtection: () -> Unit,
 ) {
@@ -125,93 +117,85 @@ fun SettingsScreen(
         versionTaps = 0
     }
 
-    Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
-        topBar = {
-            TopAppBar(
-                title = { Text("Settings") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
+    Column(
+        Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = ScreenPadding),
+    ) {
+        Text(
+            "Settings",
+            style    = MaterialTheme.typography.headlineLarge,
+            modifier = Modifier.padding(top = 20.dp, bottom = 16.dp),
+        )
+
+        ProtectionSummaryCard(
+            isArmed               = isArmed,
+            isAccessibilityActive = isAccessibilityActive,
+            isAdminActive         = isAdminActive,
+            extras                = extras,
+            onOpenSetup           = onPermissions,
+        )
+
+        SettingsSection("Tools") {
+            SettingsRow(
+                icon      = Icons.Outlined.Insights,
+                title     = "Screen time & reels",
+                subtitle  = if (hasUsageAccess) {
+                    "Day and week breakdowns per app"
+                } else {
+                    "Reels only until usage access is on"
                 },
+                onClick   = onInsights,
             )
-        },
-    ) { padding ->
-        Column(
-            Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .verticalScroll(rememberScrollState()),
-        ) {
-            ProtectionSummaryCard(
-                isArmed               = isArmed,
-                isAccessibilityActive = isAccessibilityActive,
-                isAdminActive         = isAdminActive,
-                extras                = extras,
-                onOpenSetup           = onPermissions,
-            )
-
-            SettingsSection("Tools") {
-                SettingsRow(
-                    icon      = Icons.Filled.BarChart,
-                    title     = "Screen time",
-                    subtitle  = if (hasUsageAccess) {
-                        "Today's usage per app"
-                    } else {
-                        "Needs usage access — grant it in Setup"
-                    },
-                    onClick   = onScreenTime,
-                )
-                HorizontalDivider()
-                SettingsRow(
-                    icon     = Icons.Filled.Extension,
-                    title    = "Permissions & setup",
-                    subtitle = "Grant, re-check, or repair what protection needs",
-                    onClick  = onPermissions,
-                )
-            }
-
-            SettingsSection("Installing & updating") {
-                SettingsRow(
-                    icon     = Icons.Filled.Inventory2,
-                    title    = "Sideload notes",
-                    subtitle = "Play Protect and restricted settings, in order",
-                    trailing = if (showInstallNotes) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
-                    onClick  = { showInstallNotes = !showInstallNotes },
-                )
-                AnimatedVisibility(
-                    visible = showInstallNotes,
-                    enter   = expandVertically() + fadeIn(),
-                    exit    = shrinkVertically() + fadeOut(),
-                ) {
-                    InstallNotes()
-                }
-            }
-
-            SettingsSection("Protection") {
-                SettingsRow(
-                    icon      = Icons.AutoMirrored.Filled.Logout,
-                    title     = "Remove protection",
-                    subtitle  = "Deactivate Device Admin so the app can be uninstalled",
-                    titleTint = StatusColors.Danger,
-                    onClick   = onRemoveProtection,
-                )
-            }
-
-            AboutFooter(
-                versionName = remember { versionName(context) },
-                onVersionTap = {
-                    val next = versionTaps + 1
-                    if (next >= 7) {
-                        versionTaps = 0
-                        onEnterKey()
-                    } else {
-                        versionTaps = next
-                    }
-                },
+            RowDivider()
+            SettingsRow(
+                icon     = Icons.Outlined.Extension,
+                title    = "Permissions & setup",
+                subtitle = "Grant, re-check, or repair what protection needs",
+                onClick  = onPermissions,
             )
         }
+
+        SettingsSection("Installing & updating") {
+            SettingsRow(
+                icon     = Icons.Outlined.Inventory2,
+                title    = "Sideload notes",
+                subtitle = "Play Protect and restricted settings, in order",
+                trailing = if (showInstallNotes) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                onClick  = { showInstallNotes = !showInstallNotes },
+            )
+            AnimatedVisibility(
+                visible = showInstallNotes,
+                enter   = expandVertically() + fadeIn(),
+                exit    = shrinkVertically() + fadeOut(),
+            ) {
+                InstallNotes()
+            }
+        }
+
+        SettingsSection("Protection") {
+            SettingsRow(
+                icon      = Icons.AutoMirrored.Filled.Logout,
+                title     = "Remove protection",
+                subtitle  = "Deactivate Device Admin so the app can be uninstalled",
+                titleTint = StatusColors.Danger,
+                onClick   = onRemoveProtection,
+            )
+        }
+
+        AboutFooter(
+            versionName = remember { versionName(context) },
+            onVersionTap = {
+                val next = versionTaps + 1
+                if (next >= 7) {
+                    versionTaps = 0
+                    onEnterKey()
+                } else {
+                    versionTaps = next
+                }
+            },
+        )
     }
 }
 
@@ -225,52 +209,43 @@ private fun ProtectionSummaryCard(
     extras: List<Pair<String, Boolean>>,
     onOpenSetup: () -> Unit,
 ) {
-    val accent = if (isArmed) StatusColors.Success else StatusColors.Danger
-    Card(
-        modifier  = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 12.dp)
-            .clickable(onClick = onOpenSetup),
-        shape     = RoundedCornerShape(16.dp),
-        colors    = CardDefaults.cardColors(containerColor = accent.copy(alpha = 0.10f)),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-    ) {
-        Column(Modifier.padding(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    if (isArmed) Icons.Filled.Shield else Icons.Filled.WarningAmber,
-                    contentDescription = null,
-                    tint = accent,
+    val accent = if (isArmed) MaterialTheme.colorScheme.primary else StatusColors.Danger
+    Panel(onClick = onOpenSetup) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconTile(
+                if (isArmed) Icons.Filled.Shield else Icons.Filled.WarningAmber,
+                tint       = accent,
+                background = accent.copy(alpha = 0.14f),
+                size       = 48.dp,
+            )
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    if (isArmed) "Protection is on" else "Protection incomplete",
+                    style = MaterialTheme.typography.titleLarge,
                 )
-                Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        if (isArmed) "Protection armed" else "Protection incomplete",
-                        style      = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color      = accent,
-                    )
-                    Text(
-                        if (isArmed) {
-                            "Locked apps get bounced, and the app can't be uninstalled mid-lock."
-                        } else {
-                            "Tap to finish setup — locks aren't fully enforced yet."
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = accent)
+                Text(
+                    if (isArmed) {
+                        "Locked apps get bounced, and the app can't be uninstalled mid-lock."
+                    } else {
+                        "Tap to finish setup — locks aren't fully enforced yet."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
+        }
 
-            Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(16.dp))
 
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                CapabilityPill("Accessibility", isAccessibilityActive, required = true)
-                CapabilityPill("Device Admin", isAdminActive, required = true)
-                extras.forEach { (label, granted) ->
-                    CapabilityPill(label, granted, required = false)
-                }
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement   = Arrangement.spacedBy(6.dp),
+        ) {
+            CapabilityPill("Accessibility", isAccessibilityActive, required = true)
+            CapabilityPill("Device Admin", isAdminActive, required = true)
+            extras.forEach { (label, granted) ->
+                CapabilityPill(label, granted, required = false)
             }
         }
     }
@@ -283,57 +258,48 @@ private fun ProtectionSummaryCard(
  */
 @Composable
 private fun CapabilityPill(label: String, granted: Boolean, required: Boolean) {
-    val bg = when {
-        granted  -> StatusColors.Success.copy(alpha = 0.15f)
-        required -> StatusColors.Danger.copy(alpha = 0.15f)
-        else     -> MaterialTheme.colorScheme.surfaceVariant
-    }
     val fg = when {
-        granted  -> StatusColors.Success
+        granted  -> MaterialTheme.colorScheme.primary
         required -> StatusColors.Danger
         else     -> MaterialTheme.colorScheme.onSurfaceVariant
     }
-    Surface(shape = RoundedCornerShape(50), color = bg) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier   = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-        ) {
-            Icon(
-                if (granted) Icons.Filled.CheckCircle else Icons.Filled.RadioButtonUnchecked,
-                contentDescription = null,
-                tint = fg,
-                modifier = Modifier.height(12.dp),
-            )
-            Spacer(Modifier.width(4.dp))
-            Text(label, style = MaterialTheme.typography.labelSmall, color = fg, fontWeight = FontWeight.Medium)
-        }
+    val bg = when {
+        granted || required -> fg.copy(alpha = 0.12f)
+        else                -> MaterialTheme.colorScheme.surfaceContainerHigh
+    }
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(bg)
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+    ) {
+        Icon(
+            if (granted) Icons.Filled.CheckCircle else Icons.Filled.RadioButtonUnchecked,
+            contentDescription = null,
+            tint = fg,
+            modifier = Modifier.size(14.dp),
+        )
+        Spacer(Modifier.width(5.dp))
+        Text(label, style = MaterialTheme.typography.labelMedium, color = fg)
     }
 }
 
 // ── sections & rows ────────────────────────────────────────────────────────────
 @Composable
 private fun SettingsSection(title: String, content: @Composable () -> Unit) {
-    Column(Modifier.padding(top = 8.dp)) {
-        Text(
-            title.uppercase(),
-            style      = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.Bold,
-            color      = MaterialTheme.colorScheme.primary,
-            modifier   = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
-        )
-        Card(
-            modifier  = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp),
-            shape     = RoundedCornerShape(16.dp),
-            colors    = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant,
-            ),
-            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-        ) {
-            Column { content() }
-        }
+    Column(Modifier.padding(top = 24.dp)) {
+        Eyebrow(title, modifier = Modifier.padding(start = 4.dp, bottom = 10.dp))
+        Panel(contentPadding = PaddingValues(0.dp)) { content() }
     }
+}
+
+@Composable
+private fun RowDivider() {
+    HorizontalDivider(
+        color    = MaterialTheme.colorScheme.outlineVariant,
+        modifier = Modifier.padding(start = 70.dp),
+    )
 }
 
 @Composable
@@ -352,18 +318,21 @@ private fun SettingsRow(
             .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(icon, contentDescription = null, tint = titleTint ?: MaterialTheme.colorScheme.onSurfaceVariant)
+        IconTile(
+            icon,
+            tint       = titleTint ?: MaterialTheme.colorScheme.onSurface,
+            background = (titleTint ?: MaterialTheme.colorScheme.onSurface).copy(alpha = 0.08f),
+        )
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
             Text(
                 title,
-                style      = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold,
-                color      = titleTint ?: MaterialTheme.colorScheme.onSurface,
+                style = MaterialTheme.typography.titleSmall,
+                color = titleTint ?: MaterialTheme.colorScheme.onSurface,
             )
             Text(
                 subtitle,
-                style = MaterialTheme.typography.labelSmall,
+                style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
@@ -421,9 +390,9 @@ private fun NoteBlock(heading: String, lines: List<String>) {
     Column(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surface)
-            .padding(12.dp),
+            .clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .padding(14.dp),
     ) {
         Text(
             heading,
@@ -455,7 +424,7 @@ private fun AboutFooter(versionName: String, onVersionTap: () -> Unit) {
     Column(
         modifier            = Modifier
             .fillMaxWidth()
-            .padding(24.dp),
+            .padding(vertical = 32.dp, horizontal = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(

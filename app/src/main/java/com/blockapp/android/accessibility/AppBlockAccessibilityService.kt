@@ -1,13 +1,17 @@
 package com.blockapp.android.accessibility
 
 import android.accessibilityservice.AccessibilityService
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.view.accessibility.AccessibilityEvent
 import android.view.inputmethod.InputMethodManager
 import android.widget.Toast
+import androidx.core.content.ContextCompat
 import com.blockapp.android.BlockApplication
 import com.blockapp.android.R
 import com.blockapp.android.admin.DeviceAdminHelper
@@ -46,19 +50,33 @@ import kotlinx.coroutines.runBlocking
  * own warning text (see BlockDeviceAdminReceiver) -- the guard here stops reaching that
  * dialog at all.
  *
- * Separately from both tiers, TYPE_VIEW_SCROLLED events feed [ReelScrollDetector], which counts
- * short-form videos watched per app for the counter on HomeScreen, and [ReelBubble], which
- * floats today's total beside the camera while a reel viewer is open. Both only observe and
- * never act on the foreground app, so they have no bearing on enforcement.
+ * Separately from both tiers, scroll and content-change events feed [ReelTracker], which counts
+ * short-form videos watched per app (and the time spent on them) for HomeScreen and Insights,
+ * and opens a session while a reel viewer is on screen, during which [ReelBubble] floats
+ * today's total beside the camera. Both only observe and never act on the foreground app, so
+ * they have no bearing on enforcement. Content-change events in particular go nowhere near
+ * Tier 1 or Tier 2; they only arm the tracker's throttled scan.
  */
 class AppBlockAccessibilityService : AccessibilityService() {
 
     private val handler = Handler(Looper.getMainLooper())
     private var serviceScope: CoroutineScope? = null
     private var watchdogScheduled = false
-    private var reelDetector: ReelScrollDetector? = null
+    private var reelTracker: ReelTracker? = null
     private var reelBubble: ReelBubble? = null
     private var bubbleTransientPackages: Set<String> = emptySet()
+
+    /**
+     * Screen-off ends the reel session. Without it the bubble, an accessibility overlay, stays
+     * up over the lock screen, and the session's watch time keeps running while nobody watches.
+     */
+    private val screenOffReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            // Only ever registered from API 28, alongside the tracker (see onServiceConnected).
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) reelTracker?.onScreenOff()
+        }
+    }
+    private var screenOffRegistered = false
 
     /**
      * Backstop against missed events. onAccessibilityEvent only fires when the system decides
@@ -106,21 +124,35 @@ class AppBlockAccessibilityService : AccessibilityService() {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
         serviceScope = scope
 
-        // The detector needs scrollDeltaY, which AccessibilityEvent only gained in API 28 (P).
+        // The tracker needs scrollDeltaY, which AccessibilityEvent only gained in API 28 (P).
         // Below that the counter simply stays at zero, and HomeScreen says why.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             val bubble = ReelBubble(this, app.repository, scope)
             reelBubble = bubble
             bubbleTransientPackages = bubbleTransientPackages()
-            reelDetector = ReelScrollDetector(
+            reelTracker = ReelTracker(
+                service = this,
                 handler = handler,
                 ignoredPackages = reelIgnoredPackages(),
-                onReelsWatched = { pkg, count ->
-                    app.repository.addReelsWatched(pkg, count)
-                    bubble.show(pkg)
+                listener = object : ReelTracker.Listener {
+                    override fun onReelsWatched(packageName: String, count: Int, watchMs: Long) {
+                        app.repository.addReelsWatched(packageName, count, watchMs)
+                    }
+
+                    override fun onSessionStarted(packageName: String) = bubble.show(packageName)
+
+                    override fun onSessionEnded(packageName: String) = bubble.hide()
                 },
-                onFeedScrolled = { pkg -> if (bubble.shownFor == pkg) bubble.hide() },
             )
+            // Not exported: screen-off is a system broadcast, which reaches a not-exported
+            // receiver anyway, and nothing else should be able to end a session.
+            ContextCompat.registerReceiver(
+                this,
+                screenOffReceiver,
+                IntentFilter(Intent.ACTION_SCREEN_OFF),
+                ContextCompat.RECEIVER_NOT_EXPORTED,
+            )
+            screenOffRegistered = true
         }
         scope.launch {
             app.repository.activeLocks.collect { locks ->
@@ -139,29 +171,44 @@ class AppBlockAccessibilityService : AccessibilityService() {
 
     override fun onUnbind(intent: Intent?): Boolean {
         handler.removeCallbacks(watchdog)
+        handler.removeCallbacks(showOverlay)
         watchdogScheduled = false
-        reelDetector?.cancel()
-        reelDetector = null
-        reelBubble?.hide()
+        // The tracker only exists from API 28, but the field's type doesn't say so.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) reelTracker?.release()
+        reelTracker = null
+        reelBubble?.hide(immediate = true)
         reelBubble = null
+        if (screenOffRegistered) {
+            screenOffRegistered = false
+            unregisterReceiver(screenOffReceiver)
+        }
         serviceScope?.cancel()
         serviceScope = null
         return super.onUnbind(intent)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (event?.eventType == AccessibilityEvent.TYPE_VIEW_SCROLLED) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                val metrics = resources.displayMetrics
-                reelDetector?.onScrolled(event, metrics.widthPixels, metrics.heightPixels)
+        when (event?.eventType) {
+            AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) reelTracker?.onScrolled(event)
+                return
             }
-            return
+            // Many per second while a video plays. Only the tracker's throttle sees these.
+            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
+                val pkg = event.packageName?.toString() ?: return
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) reelTracker?.onContentChanged(pkg)
+                return
+            }
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> Unit
+            else -> return
         }
-        if (event?.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
         val eventPackage = event.packageName?.toString() ?: return
         val className = event.className?.toString().orEmpty()
 
-        hideBubbleIfLeft(eventPackage, className)
+        // Runs before Tier 1/2 so a bounce home also ends the reel session and its bubble.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            reelTracker?.onWindowStateChanged(eventPackage, className, bubbleTransientPackages)
+        }
 
         // Tier 1: guard our own protective system screens, but only once Device Admin is
         // active — otherwise this would block the setup flow itself (see class doc above).
@@ -243,8 +290,29 @@ class AppBlockAccessibilityService : AccessibilityService() {
             root.findAccessibilityNodeInfosByText(packageName).isNotEmpty()
     }
 
+    /**
+     * Sends the locked app home at once, then puts the block wall up [OVERLAY_DELAY_MS] later.
+     *
+     * The delay is load-bearing. GLOBAL_ACTION_HOME is carried out asynchronously by the
+     * system, and started together with the wall it routinely landed *after* it, so the launcher
+     * ended up on top and the wall was never seen: observed on an API 34 emulator, where the
+     * log read overlay, overlay, HOME, HOME, overlay, HOME. The user was just dumped on the
+     * home screen with no reason given. Re-posting one pending start on every kick means the
+     * wall always comes last, after the final HOME of a burst. The HOME itself stays
+     * immediate, so enforcement never waits on the delay.
+     */
     private fun kickToHome(packageName: String, blockUntil: Long) {
         performGlobalAction(GLOBAL_ACTION_HOME)
+        handler.removeCallbacks(showOverlay)
+        pendingOverlay = packageName to blockUntil
+        handler.postDelayed(showOverlay, OVERLAY_DELAY_MS)
+    }
+
+    private var pendingOverlay: Pair<String, Long>? = null
+
+    private val showOverlay = Runnable {
+        val (packageName, blockUntil) = pendingOverlay ?: return@Runnable
+        pendingOverlay = null
         val overlayIntent = Intent(this, BlockOverlayActivity::class.java).apply {
             // NO_ANIMATION on top of the usual flags: without it the user sees the launcher's
             // window animation and then the overlay's, back to back, which reads as a glitch
@@ -258,21 +326,6 @@ class AppBlockAccessibilityService : AccessibilityService() {
             putExtra(BlockOverlayActivity.EXTRA_BLOCK_UNTIL, blockUntil)
         }
         startActivity(overlayIntent)
-    }
-
-    /**
-     * Takes the reel bubble down once a different app comes to the front, so it doesn't sit on
-     * top of whatever the user switched to. Runs before Tier 1/2 so a bounce home also clears
-     * it.
-     */
-    private fun hideBubbleIfLeft(eventPackage: String, className: String) {
-        val bubble = reelBubble ?: return
-        val shownFor = bubble.shownFor ?: return
-        if (eventPackage == shownFor || eventPackage in bubbleTransientPackages) return
-        // Our own non-activity windows (the bubble itself, the Tier 1 toast) may report as this
-        // package. Treating them as a switch would hide the bubble the moment it appears.
-        if (eventPackage == packageName && !className.startsWith("$packageName.")) return
-        bubble.hide()
     }
 
     /**
@@ -306,6 +359,13 @@ class AppBlockAccessibilityService : AccessibilityService() {
     private companion object {
         /** How often the watchdog re-checks the foreground app against active locks. */
         const val WATCHDOG_INTERVAL_MS = 200L
+
+        /**
+         * Wait between sending a locked app home and showing the block wall. Long enough for
+         * the HOME transition to finish (150-450ms in the emulator log), short enough that the
+         * wall reads as the cause of the bounce rather than a separate event.
+         */
+        const val OVERLAY_DELAY_MS = 350L
 
         const val SYSTEM_UI_PACKAGE = "com.android.systemui"
 

@@ -5,10 +5,11 @@ import androidx.compose.ui.graphics.Color
 /**
  * Semantic status colours shared across screens that show granted / needs-attention / heads-up
  * state. Kept as plain literals rather than derived from the colour scheme — "granted" is a
- * status, not a brand colour, and must read the same regardless of theme.
+ * status, not a brand colour. Tuned for the dark-only theme: each is used both as text and as a
+ * 10-15% wash behind that text, and has to stay legible on Ink850 in both roles.
  */
 object StatusColors {
-    val Success = Color(0xFF3D6B3A)
-    val Danger = Color(0xFF9B1C1C)
-    val Warning = Color(0xFF8A5A12)
+    val Success = Color(0xFF7FE08F)
+    val Danger = Color(0xFFFF6B6B)
+    val Warning = Color(0xFFFFC14D)
 }

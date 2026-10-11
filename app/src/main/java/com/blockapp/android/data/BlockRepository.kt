@@ -110,21 +110,28 @@ class BlockRepository(
     fun observeReelTotal(day: LocalDate): Flow<Int> =
         observeReelCounts(day).map { counts -> counts.sumOf { it.reels } }
 
+    /** Reel totals per day from [fromDay] on, oldest first. Days with no reels have no row. */
+    fun observeReelHistory(fromDay: LocalDate): Flow<List<ReelDayTotal>> =
+        dao.observeReelHistory(fromDay.toString())
+
     /**
-     * Adds [count] reels to today's tally for [packageName]. Called from the accessibility
-     * service's main thread, so the write is launched rather than awaited.
+     * Adds [count] reels and [watchMs] of reel-viewer time to today's tally for [packageName].
+     * Either may be zero: a session ending adds its last stretch of time with no new reel.
+     * Called from the accessibility service's main thread, so the write is launched rather than
+     * awaited.
      *
      * A failed write is dropped rather than rethrown. [scope] has no exception handler, so an
      * uncaught SQLiteException here (disk full, DB locked) would take the whole process down —
      * and with it the accessibility service and every running lock — over a statistic.
      * Losing a few counted reels is the right trade (CLAUDE.md invariant 9).
      */
-    fun addReelsWatched(packageName: String, count: Int) {
+    fun addReelsWatched(packageName: String, count: Int, watchMs: Long) {
+        if (count <= 0 && watchMs <= 0L) return
         val day = LocalDate.now().toString()
         scope.launch {
             try {
                 dao.insertReelCountIfAbsent(ReelCountEntity(day, packageName, reels = 0))
-                dao.incrementReelCount(day, packageName, count)
+                dao.incrementReelCount(day, packageName, count, watchMs)
             } catch (e: SQLiteException) {
                 // Dropped on purpose; see KDoc.
             }

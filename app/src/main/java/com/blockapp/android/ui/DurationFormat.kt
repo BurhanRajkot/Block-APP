@@ -44,3 +44,17 @@ internal fun formatUnlockAt(blockUntil: Long): String {
     val pattern = if (sameDay) "h:mm a" else "EEE h:mm a"
     return SimpleDateFormat(pattern, Locale.getDefault()).format(Date(blockUntil))
 }
+
+/** Coarse time-spent figure for usage stats: `3h 42m`, `42m`, `<1m`. */
+internal fun formatHoursMinutes(ms: Long): String {
+    val totalMinutes = ms / 60_000L
+    val hours = totalMinutes / 60
+    val minutes = totalMinutes % 60
+    return when {
+        hours > 0 && minutes > 0 -> "${hours}h ${minutes}m"
+        hours > 0 -> "${hours}h"
+        minutes > 0 -> "${minutes}m"
+        ms > 0 -> "<1m"
+        else -> "0m"
+    }
+}

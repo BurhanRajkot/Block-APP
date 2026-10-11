@@ -802,19 +802,6 @@ private fun openNotificationSettings(context: Context) {
     }
 }
 
-private fun openUsageAccessSettings(context: Context) {
-    try {
-        context.startActivity(
-            Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-        )
-    } catch (e: ActivityNotFoundException) {
-        // Usage access isn't exposed as its own screen on every OEM build; App info is the one
-        // place it can always be reached from.
-        context.startActivity(appInfoIntent(context).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-    }
-}
-
 private fun openAppInfo(context: Context) {
     context.startActivity(appInfoIntent(context).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
 }

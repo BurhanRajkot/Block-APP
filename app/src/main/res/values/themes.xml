@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- Window background only — everything else Compose draws is themed via BlockAppTheme in
-         MainActivity. This just stops the system's default white window background from
-         flashing before the first Compose frame lands, matching whichever mode the Compose
-         theme resolves to. -->
-    <style name="Theme.BlockApp" parent="android:Theme.Material.Light.NoActionBar">
-        <item name="android:windowBackground">#F3EDE3</item>
-        <item name="android:statusBarColor">#F3EDE3</item>
-        <item name="android:navigationBarColor">#F3EDE3</item>
+         MainActivity. This just stops the system's default window background from flashing
+         before the first Compose frame lands. Dark in both system modes because the Compose
+         theme is dark-only (see ui/theme/Color.kt); Ink950 there. -->
+    <style name="Theme.BlockApp" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#0A0B0D</item>
+        <item name="android:statusBarColor">#0A0B0D</item>
+        <item name="android:navigationBarColor">#111316</item>
     </style>
 </resources>

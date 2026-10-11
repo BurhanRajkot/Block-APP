@@ -9,7 +9,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [BlockedAppEntity::class, UsedNonceEntity::class, ReelCountEntity::class],
-    version = 2,
+    version = 3,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -25,7 +25,7 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "blockapp.db",
-                ).addMigrations(MIGRATION_1_2).build().also { instance = it }
+                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build().also { instance = it }
             }
 
         /**
@@ -41,6 +41,20 @@ abstract class AppDatabase : RoomDatabase() {
                     "CREATE TABLE IF NOT EXISTS `reel_counts` (`day` TEXT NOT NULL, " +
                         "`packageName` TEXT NOT NULL, `reels` INTEGER NOT NULL, " +
                         "PRIMARY KEY(`day`, `packageName`))",
+                )
+            }
+        }
+
+        /**
+         * v3 adds reel_counts.watchMs. The DEFAULT 0 is load-bearing twice over: SQLite refuses
+         * to add a NOT NULL column to a table with rows unless it has a default, and Room checks
+         * the default against ReelCountEntity's `@ColumnInfo(defaultValue = "0")` when it
+         * validates the table (same failure mode as MIGRATION_1_2 if they drift apart).
+         */
+        private val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE `reel_counts` ADD COLUMN `watchMs` INTEGER NOT NULL DEFAULT 0",
                 )
             }
         }

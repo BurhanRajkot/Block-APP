@@ -5,7 +5,15 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.addCallback
 import androidx.activity.compose.setContent
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.keyframes
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.Image
@@ -41,7 +49,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -50,17 +60,22 @@ import androidx.compose.ui.unit.dp
 import com.blockapp.android.BlockApplication
 import com.blockapp.android.MainActivity
 import com.blockapp.android.ui.theme.BlockAppTheme
+import com.blockapp.android.ui.theme.Ink800
+import com.blockapp.android.ui.theme.Ink950
+import com.blockapp.android.ui.theme.Volt
+import com.blockapp.android.ui.theme.VoltDeep
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
 // ── screen-specific palette ───────────────────────────────────────────────────
-// This screen is deliberately dark while the rest of the app is light: it has to read as a wall
-// the user has hit, not as another page of the app they can interact their way out of. Matches
-// the dark window theme set on this activity in the manifest, so there's no flash on launch.
-private val WallBackground = Color(0xFF101014)
-private val WallAccent     = Color(0xFFE2A07A)
-private val WallTrack      = Color(0xFF2A2A33)
+// The app's own graphite and Volt, but with nothing else on screen: it has to read as a wall
+// the user has hit, not as another page of the app they can interact their way out of. Dark,
+// to match the dark window theme set on this activity in the manifest, so there's no flash on
+// launch.
+private val WallBackground = Ink950
+private val WallAccent     = Volt
+private val WallTrack      = Ink800
 
 /**
  * The wall shown when a locked app is bounced to the home screen (see
@@ -218,14 +233,42 @@ private fun BlockOverlayContent(
         verticalArrangement = Arrangement.Center,
     ) {
         // ── countdown dial ────────────────────────────────────────────────
+        // A slow breathing glow behind the dial, and a short "nope" shake of the app icon when
+        // the wall appears: the bounce should read as the app refusing, not as a crash.
+        val breath by rememberInfiniteTransition(label = "breath").animateFloat(
+            initialValue = 0.10f,
+            targetValue = 0.22f,
+            animationSpec = infiniteRepeatable(tween(BREATH_MS), RepeatMode.Reverse),
+            label = "glow",
+        )
+        val shake = remember { Animatable(0f) }
+        LaunchedEffect(packageName, blockUntil) {
+            shake.snapTo(0f)
+            shake.animateTo(
+                0f,
+                keyframes {
+                    durationMillis = SHAKE_MS
+                    -14f at 60
+                    12f at 130
+                    -8f at 200
+                    5f at 270
+                    -2f at 330
+                },
+            )
+        }
         Box(contentAlignment = Alignment.Center) {
+            Canvas(Modifier.size((DIAL_SIZE_DP * 1.5f).dp)) {
+                drawCircle(
+                    brush = Brush.radialGradient(listOf(WallAccent.copy(alpha = breath), Color.Transparent)),
+                )
+            }
             if (elapsedFraction != null) {
                 CircularProgressIndicator(
                     progress    = { animatedFraction },
                     modifier    = Modifier.size(DIAL_SIZE_DP.dp),
                     color       = WallAccent,
                     trackColor  = WallTrack,
-                    strokeWidth = 6.dp,
+                    strokeWidth = 8.dp,
                     strokeCap   = StrokeCap.Round,
                 )
             }
@@ -235,6 +278,7 @@ private fun BlockOverlayContent(
                         bitmap             = identity.icon,
                         contentDescription = null,
                         modifier           = Modifier
+                            .graphicsLayer { translationX = shake.value.dp.toPx() }
                             .size(56.dp)
                             .clip(CircleShape),
                     )
@@ -247,15 +291,14 @@ private fun BlockOverlayContent(
                     )
                 }
                 Spacer(Modifier.height(10.dp))
-                Text(
+                RollingText(
                     if (remainingMs > 0L) formatCountdown(remainingMs) else "0:00",
-                    style      = MaterialTheme.typography.displaySmall,
-                    fontWeight = FontWeight.Bold,
+                    style      = MaterialTheme.typography.displayMedium,
                     color      = Color.White,
                 )
                 Text(
-                    "remaining",
-                    style = MaterialTheme.typography.labelMedium,
+                    "REMAINING",
+                    style = MaterialTheme.typography.labelSmall,
                     color = Color.White.copy(alpha = 0.5f),
                 )
             }
@@ -266,8 +309,7 @@ private fun BlockOverlayContent(
         // ── what and until when ───────────────────────────────────────────
         Text(
             identity?.let { "${it.label} is locked" } ?: "This app is locked",
-            style      = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.SemiBold,
+            style      = MaterialTheme.typography.headlineMedium,
             color      = Color.White,
             textAlign  = TextAlign.Center,
         )
@@ -282,7 +324,7 @@ private fun BlockOverlayContent(
 
         Box(
             modifier = Modifier
-                .clip(RoundedCornerShape(12.dp))
+                .clip(RoundedCornerShape(18.dp))
                 .background(Color.White.copy(alpha = 0.06f))
                 .padding(horizontal = 16.dp, vertical = 12.dp),
         ) {
@@ -301,14 +343,14 @@ private fun BlockOverlayContent(
             onClick  = onGoHome,
             modifier = Modifier
                 .fillMaxWidth()
-                .height(52.dp),
-            shape    = RoundedCornerShape(14.dp),
+                .height(56.dp),
+            shape    = RoundedCornerShape(50),
             colors   = ButtonDefaults.buttonColors(
                 containerColor = WallAccent,
-                contentColor   = Color(0xFF10131A),
+                contentColor   = VoltDeep,
             ),
         ) {
-            Text("Go home", fontWeight = FontWeight.SemiBold)
+            Text("Go home", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
         }
         TextButton(onClick = onOpenApp, modifier = Modifier.fillMaxWidth()) {
             Text("Open App Blocker", color = Color.White.copy(alpha = 0.7f))
@@ -317,4 +359,7 @@ private fun BlockOverlayContent(
 }
 
 /** Big enough to read the countdown inside it at arm's length, small enough for a short phone. */
-private const val DIAL_SIZE_DP = 200
+private const val DIAL_SIZE_DP = 232
+
+private const val BREATH_MS = 2_400
+private const val SHAKE_MS = 380

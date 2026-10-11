@@ -88,8 +88,10 @@ may not have populated yet) and `getActiveOnce()` (receivers running before/outs
 **Enforcement is two-tiered**, both in `AppBlockAccessibilityService` (`accessibility/`):
 
 - *Tier 2 — locks.* A locked package reaching the foreground is kicked home via
-  `performGlobalAction(GLOBAL_ACTION_HOME)` and `BlockOverlayActivity` is shown. Two paths feed
-  it: the live `onAccessibilityEvent` (`typeWindowStateChanged`, `notificationTimeout=0`) and a
+  `performGlobalAction(GLOBAL_ACTION_HOME)` and `BlockOverlayActivity` is shown
+  `OVERLAY_DELAY_MS` later. HOME runs asynchronously and used to land on top of a wall started
+  at the same moment, so the wall was never seen. Don't fold the start back into the same
+  instant. Two paths feed it: the live `onAccessibilityEvent` (`typeWindowStateChanged`, `notificationTimeout=0`) and a
   200ms watchdog poll (`WATCHDOG_INTERVAL_MS`) that runs *only* while `activeLocks` is non-empty.
   The watchdog exists because window-state events get coalesced or dropped under rapid
   open/close taps, and a single missed event otherwise means the app stays open indefinitely —
@@ -105,20 +107,50 @@ Tier 1 is gated on Device Admin already being active, and that gate is load-bear
 must be enabled *before* Device Admin can be activated, so an unconditional Tier 1 would bounce the
 user out of the Device Admin activation screen and make setup impossible to complete.
 
-**Reel counter (observe-only).** The same service also receives `typeViewScrolled` and hands it
-to `ReelScrollDetector`, which counts short-form videos per app per day into `reel_counts` for the
-counter on `HomeScreen`. It has no per-app view-ID list. It recognises a full-screen vertical
-pager by bursts that land exactly on whole container heights, and trusts a container only after
-two such bursts in a row. It never acts on the foreground app and must stay that way; an
-exception from it must not reach the service (see `BlockRepository.addReelsWatched`). Requires
-API 28 (`scrollDeltaY`).
+**Reel counter (observe-only).** The same service also receives `typeViewScrolled` and
+`typeWindowContentChanged` and hands them to `ReelTracker`, which counts short-form videos (and
+the time spent on them) per app per day into `reel_counts` for `HomeScreen` and
+`InsightsScreen`. It has no per-app list, and it uses two independent signals because neither
+works in every app:
+
+- `ReelScreenScanner` walks the active window (throttled to about once every 800ms, on a
+  background `HandlerThread`) looking for a full-screen scrollable showing exactly one
+  edge-to-edge child. That shape plus a second signal (page up/down actions, or a reel-ish view
+  ID such as `reel_recycler` / `clips_viewer_view_pager`) opens a session on the *first* reel,
+  before any swipe. It also counts a page change as a reel unless a measured swipe claims it
+  within `PAGE_CHANGE_GRACE_MS`, and that is the *only* counter that works for Compose apps:
+  Compose reports scroll deltas in an estimated unit, not pixels (a 2209px page swipe arrived
+  as −7px on an emulator), and drops semantics-free page containers from the tree, so a Compose
+  pager is recognised by its page up/down actions alone. Returning to a reel is recognised by
+  the page's visible text, because Compose rebuilds the node when a page comes back.
+- `ReelScrollDetector` measures swipes. A burst that lands exactly on whole container heights is
+  a pager. One that doesn't is a feed, which ends the session. That confirms viewers the scanner
+  wasn't sure about, and counts by furthest position so rewatching doesn't double-count.
+
+Two service-config flags exist only for this, and removing either silently breaks counting:
+`flagIncludeNotImportantViews`, because the system drops scroll events from views marked
+not important unless asked, and many pagers are; and `flagReportViewIds` for the hints.
+`SurfaceView`/`TextureView` report as plain `android.view.View`, so "is a video playing" can't
+be detected by class name. Don't try.
+
+It never acts on the foreground app and must stay that way. Content-change events must never
+reach Tier 1/2, only the tracker's throttle. An exception from it must not reach the service
+(see `BlockRepository.addReelsWatched` and the guards in `ReelTracker`). Requires API 28
+(`scrollDeltaY`). Every decision is logged under `adb logcat -s ReelTracker` for on-device
+debugging.
 
 `ReelBubble` is its on-screen half: a tiny `TYPE_ACCESSIBILITY_OVERLAY` pill beside the camera
-cutout showing today's total. It's shown on each counted reel and hidden on a feed-like scroll
-(`onFeedScrolled`) or when another app comes to the front. It needs no `SYSTEM_ALERT_WINDOW`,
-but only through the service's own `WindowManager`, and it must stay `FLAG_NOT_TOUCHABLE`
-because it sits over other apps' top bars. Its WindowManager calls are guarded for the same
-reason as the detector.
+cutout showing today's total. It is shown for exactly as long as the tracker has a session open.
+The session ends on a feed-like scroll, when the viewer leaves the screen, when another app
+comes to the front, and on screen-off (a receiver in the service), so the pill never sits over
+the lock screen. It needs no `SYSTEM_ALERT_WINDOW`, but only through the service's own
+`WindowManager`, and it must stay `FLAG_NOT_TOUCHABLE` because it sits over other apps' top
+bars. Its WindowManager calls are guarded for the same reason as the tracker.
+
+**Screen time** (`usage/UsageStatsProvider.history`) replays the raw `queryEvents` resume/pause
+stream rather than reading `queryUsageStats` buckets. The buckets overlap the requested range,
+which inflated "today", and can't be split by hour. It needs Usage access, and every screen
+that shows it degrades to a grant prompt without it.
 
 **The only sanctioned way out** is `RemoveProtectionScreen`, which calls
 `DeviceAdminHelper.removeAdmin()` in-process — an app may always drop its own admin without
@@ -182,7 +214,7 @@ Ordered by how bad it is to get wrong. The first one can force a factory reset.
    can start and stop the service faster than Android's start-up handshake completes, which kills
    the whole process with `ForegroundServiceDidNotStartInTimeException`. This was hit in practice
    at cold start when a stale expired lock flipped the flow non-empty→empty within milliseconds.
-7. **A Room schema change needs a version bump and a migration.** `AppDatabase` is `version = 2`
+7. **A Room schema change needs a version bump and a migration.** `AppDatabase` is `version = 3`
    with `exportSchema = false` and **no** `fallbackToDestructiveMigration()`, so shipping a changed
    schema without a migration throws at open — and on this app, a DB that won't open means
    `activeLocks` never populates and enforcement silently stops. Migrations are hand-written SQL;
@@ -216,6 +248,22 @@ cross-references to other files in prose — this codebase leans on them heavily
 holding one: `DeviceAdminHelper`, `AlarmScheduler`, `KeyVerifier`, `ProtectedPackages`,
 `InstalledAppsProvider`, `UsageStatsProvider`. Don't add a class with an injected `Context` for
 this kind of helper.
+
+**UI look.** Dark-only on purpose (`ui/theme/Color.kt`): graphite surfaces, Volt (`primary`) for
+anything the user does, Ember (`tertiary`) for the reel counter only. Screens are assembled from
+`ui/UiKit.kt` (`Panel`, `ScreenHeader`, `PrimaryButton`, `BarChart`, …), so reach for those before
+styling a Material component by hand. Charts are drawn with `Canvas`; no chart library.
+`RemoveProtectionScreen`, `OnboardingScreen` and `UnlockKeyScreen` deliberately only pick up the
+theme, so their structure (invariant 1) isn't touched by visual work.
+
+**Motion** lives in `ui/Motion.kt` (`Reveal`, `AnimatedCount`, `RollingText`, `PulsingDot`) and
+`LockedCelebration.kt`. One hard rule: **anything that animates forever must be drawn in a
+`Canvas`, never animated through `size()`, offsets or `graphicsLayer`.** Compose reports every
+change to a node's on-screen bounds, transforms included, to accessibility services. A looping
+`graphicsLayer` scale on the status dot fired ~8 `TYPE_WINDOW_CONTENT_CHANGED` events a second
+from an idle Home screen, waking every accessibility service on the phone, this app's included.
+Check with `adb shell uiautomator events` on an idle screen: it should print nothing. Finite
+animations (arrival, press, count-up) are fine.
 
 **UI is plain composables, no ViewModels.** Each screen is a top-level `@Composable` taking
 `onDone`/`onBack`-style lambdas; state is `remember { mutableStateOf(...) }`; navigation is a
@@ -253,7 +301,8 @@ else, and no version catalog — versions are literals in `app/build.gradle.kts`
 versions in the root `build.gradle.kts`.
 
 Don't add without a real need: any DI framework (Hilt/Koin) — `BlockApplication` is the wiring;
-Navigation-Compose — the `sealed class` + `when` is sufficient for seven screens; WorkManager —
+Navigation-Compose — the `sealed class` + `when` (three bottom-bar tabs plus five sub-screens) is
+sufficient; WorkManager —
 `AlarmManager` already covers expiry and exact timing matters; any networking, analytics, or crash
 library — see invariant 8; LiveData or RxJava — the codebase is coroutines/Flow throughout.
 

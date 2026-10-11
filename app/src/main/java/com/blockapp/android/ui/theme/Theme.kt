@@ -1,82 +1,74 @@
 package com.blockapp.android.ui.theme
 
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 
-private val LightColors = lightColorScheme(
-    primary = Rust,
-    onPrimary = PaperRaised,
-    primaryContainer = RustWash,
-    onPrimaryContainer = RustDeep,
-    secondary = InkMuted,
-    onSecondary = PaperRaised,
-    secondaryContainer = PaperInset,
-    onSecondaryContainer = Ink,
-    tertiary = Rust,
-    onTertiary = PaperRaised,
-    tertiaryContainer = RustWash,
-    onTertiaryContainer = RustDeep,
-    error = Color(0xFF9B1C1C),
-    onError = PaperRaised,
-    errorContainer = Color(0xFFF4D6D2),
-    onErrorContainer = Color(0xFF3B0A0A),
-    background = Paper,
-    onBackground = Ink,
-    surface = PaperRaised,
-    onSurface = Ink,
-    surfaceVariant = PaperInset,
-    onSurfaceVariant = InkMuted,
-    outline = Rule,
-)
-
-private val DarkColors = darkColorScheme(
-    primary = RustOnDark,
-    onPrimary = RustDeep,
-    primaryContainer = RustOnDarkContainer,
-    onPrimaryContainer = Cream,
-    secondary = CreamMuted,
-    onSecondary = Night,
-    secondaryContainer = NightInset,
-    onSecondaryContainer = Cream,
-    tertiary = RustOnDark,
-    onTertiary = RustDeep,
-    tertiaryContainer = RustOnDarkContainer,
-    onTertiaryContainer = Cream,
-    error = Color(0xFFE8A39A),
-    onError = Color(0xFF3B0A0A),
-    errorContainer = Color(0xFF6B1F1A),
-    onErrorContainer = Color(0xFFF4D6D2),
-    background = Night,
-    onBackground = Cream,
-    surface = NightRaised,
-    onSurface = Cream,
-    surfaceVariant = NightInset,
-    onSurfaceVariant = CreamMuted,
-    outline = NightRule,
+// surface == background so Material's default top bars sit flush with the page instead of
+// drawing a band. Cards use the surfaceContainer tiers, and the older screens that still draw
+// cards in surfaceVariant get the same card colour.
+private val Colors = darkColorScheme(
+    primary = Volt,
+    onPrimary = VoltDeep,
+    primaryContainer = VoltWash,
+    onPrimaryContainer = Volt,
+    inversePrimary = VoltDeep,
+    secondary = FogMuted,
+    onSecondary = Ink950,
+    secondaryContainer = Ink800,
+    onSecondaryContainer = Fog,
+    tertiary = Ember,
+    onTertiary = Ink950,
+    tertiaryContainer = EmberWash,
+    onTertiaryContainer = Ember,
+    error = StatusColors.Danger,
+    onError = Ink950,
+    errorContainer = Color(0xFF3A1414),
+    onErrorContainer = StatusColors.Danger,
+    background = Ink950,
+    onBackground = Fog,
+    surface = Ink950,
+    onSurface = Fog,
+    surfaceVariant = Ink850,
+    onSurfaceVariant = FogMuted,
+    surfaceTint = Color.Transparent,
+    inverseSurface = Fog,
+    inverseOnSurface = Ink950,
+    outline = Ink700,
+    outlineVariant = Ink800,
+    scrim = Color.Black,
+    surfaceBright = Ink800,
+    surfaceDim = Ink950,
+    surfaceContainerLowest = Ink950,
+    surfaceContainerLow = Ink900,
+    surfaceContainer = Ink850,
+    surfaceContainerHigh = Ink800,
+    surfaceContainerHighest = Ink800,
 )
 
 private val AppShapes = Shapes(
-    extraSmall = RoundedCornerShape(3.dp),
-    small = RoundedCornerShape(4.dp),
-    medium = RoundedCornerShape(6.dp),
-    large = RoundedCornerShape(8.dp),
-    extraLarge = RoundedCornerShape(10.dp),
+    extraSmall = RoundedCornerShape(8.dp),
+    small = RoundedCornerShape(12.dp),
+    medium = RoundedCornerShape(16.dp),
+    large = RoundedCornerShape(22.dp),
+    extraLarge = RoundedCornerShape(28.dp),
 )
 
+/**
+ * The [darkTheme] parameter is kept so call sites (BlockOverlayActivity passes `true`) don't
+ * have to change, but there is one palette: see Color.kt for why the app is dark-only.
+ */
 @Composable
 fun BlockAppTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
+    @Suppress("UNUSED_PARAMETER") darkTheme: Boolean = true,
     content: @Composable () -> Unit,
 ) {
     MaterialTheme(
-        colorScheme = if (darkTheme) DarkColors else LightColors,
+        colorScheme = Colors,
         typography = AppTypography,
         shapes = AppShapes,
         content = content,

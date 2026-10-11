@@ -7,7 +7,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material3.Icon
@@ -69,13 +69,13 @@ internal fun AppIcon(identity: AppIdentity, size: Int) {
             contentDescription = null,
             modifier = Modifier
                 .size(size.dp)
-                .clip(CircleShape),
+                .clip(IconShape),
         )
     } else {
         Box(
             modifier = Modifier
                 .size(size.dp)
-                .clip(CircleShape)
+                .clip(IconShape)
                 .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)),
             contentAlignment = Alignment.Center,
         ) {
@@ -88,6 +88,12 @@ internal fun AppIcon(identity: AppIdentity, size: Int) {
         }
     }
 }
+
+/**
+ * Rounded square rather than a circle: most launcher icons are already squircles, and a circle
+ * crop cuts into their corners.
+ */
+private val IconShape = RoundedCornerShape(percent = 28)
 
 /**
  * Bounded on purpose. Every entry holds an [ICON_PX]² ARGB bitmap (~83KB), so an unbounded map

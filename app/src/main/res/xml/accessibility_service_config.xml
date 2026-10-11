@@ -1,8 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- typeWindowContentChanged and the two extra flags exist only for the reel counter
+     (ReelTracker / ReelScreenScanner):
+     - flagIncludeNotImportantViews: the system drops scroll events from views marked not
+       important for accessibility unless a service asks for them, and many reel pagers mark
+       their scrolling view that way. Without it those apps never counted at all.
+     - flagReportViewIds: view IDs like reel_recycler / clips_viewer_view_pager are what let the
+       scanner recognise a reel viewer on the first video instead of after two swipes.
+     notificationTimeout stays 0: the lock watchdog's notes on missed window events apply. -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
-    android:accessibilityEventTypes="typeWindowStateChanged|typeViewScrolled"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeViewScrolled|typeWindowContentChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
-    android:accessibilityFlags="flagDefault"
+    android:accessibilityFlags="flagDefault|flagIncludeNotImportantViews|flagReportViewIds"
     android:canRetrieveWindowContent="true"
     android:description="@string/accessibility_service_description"
     android:notificationTimeout="0" />

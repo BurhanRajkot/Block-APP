@@ -1,9 +1,7 @@
 package com.blockapp.android.ui
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -19,23 +17,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -51,7 +36,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.blockapp.android.BlockApplication
-import com.blockapp.android.ui.theme.StatusColors
 import com.blockapp.android.util.InstalledAppsProvider
 import com.blockapp.android.util.LaunchableApp
 import kotlinx.coroutines.flow.collectLatest
@@ -61,19 +45,30 @@ import kotlinx.coroutines.flow.collectLatest
  * state rather than by a navigation entry, matching how the rest of the app avoids a real back
  * stack — [onBack] walks back a step first and only leaves the screen from the list.
  *
+ * [initialPackage] opens straight on the duration step for that app (the lock buttons on usage
+ * rows). Back from there leaves the screen, since the user never saw the list. A package that
+ * isn't launchable, or is protected, isn't in [InstalledAppsProvider.listLaunchableApps] and
+ * falls back to the list, so this entry point can't get around ProtectedPackages either.
+ *
  * The duration step is where the commitment is actually made, so it is deliberately the slower
  * half: it names the wall-clock unlock time before the confirm dialog, and again inside it.
  * "2h" is easy to pick without registering what it means; "unlocks at 11:47 PM" isn't.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AppPickerScreen(onBack: () -> Unit, onLocked: () -> Unit) {
+fun AppPickerScreen(
+    initialPackage: String? = null,
+    onBack: () -> Unit,
+    onLocked: (LockedSummary) -> Unit,
+) {
     val context = LocalContext.current
     val app = context.applicationContext as BlockApplication
 
     val apps = remember { InstalledAppsProvider.listLaunchableApps(context) }
     var query by remember { mutableStateOf("") }
-    var selected by remember { mutableStateOf<LaunchableApp?>(null) }
+    var selected by remember {
+        mutableStateOf(initialPackage?.let { pkg -> apps.firstOrNull { it.packageName == pkg } })
+    }
+    val openedOnApp = remember { selected != null }
 
     // Drives the "Locked" chip in the list and the extend-vs-lock wording on the duration step.
     // Observed rather than sampled once: a lock can expire while this screen is open, and a stale
@@ -83,6 +78,9 @@ fun AppPickerScreen(onBack: () -> Unit, onLocked: () -> Unit) {
     LaunchedEffect(Unit) {
         app.repository.activeLocks.collectLatest { activeLocks = it }
     }
+
+    var confirmed by remember { mutableStateOf(false) }
+    var frozenUntil by remember { mutableStateOf<Long?>(null) }
 
     val target = selected
     if (target == null) {
@@ -97,18 +95,21 @@ fun AppPickerScreen(onBack: () -> Unit, onLocked: () -> Unit) {
     } else {
         DurationStep(
             target        = target,
-            existingUntil = activeLocks[target.packageName],
-            onBack        = { selected = null },
+            // Frozen at confirm: the screen stays composed while it slides away, and without
+            // this the lock it just created flips its title to "Extend the lock" mid-exit.
+            existingUntil = if (confirmed) frozenUntil else activeLocks[target.packageName],
+            onBack        = { if (openedOnApp) onBack() else selected = null },
             onConfirm     = { blockUntil ->
+                frozenUntil = activeLocks[target.packageName]
+                confirmed = true
                 app.repository.lockApp(target.packageName, target.label, blockUntil)
-                onLocked()
+                onLocked(LockedSummary(target.label, blockUntil, listOf(target.packageName)))
             },
         )
     }
 }
 
 // ── step 1: pick an app ────────────────────────────────────────────────────────
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AppList(
     apps: List<LaunchableApp>,
@@ -126,55 +127,38 @@ private fun AppList(
         }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title          = { Text("Lock an app", fontWeight = FontWeight.SemiBold) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                },
-            )
-        },
-    ) { padding ->
-        Column(
-            Modifier
-                .fillMaxSize()
-                .padding(padding),
-        ) {
-            OutlinedTextField(
-                value        = query,
-                onValueChange = onQuery,
-                label        = { Text("Search apps") },
-                singleLine   = true,
-                shape        = RoundedCornerShape(12.dp),
-                modifier     = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp),
-            )
-            Spacer(Modifier.height(8.dp))
+    Column(Modifier.fillMaxSize()) {
+        ScreenHeader(
+            title    = "Lock an app",
+            onBack   = onBack,
+            subtitle = "Pick the one you keep reaching for.",
+        )
+        SearchField(
+            value         = query,
+            onValueChange = onQuery,
+            placeholder   = "Search apps",
+            modifier      = Modifier.padding(horizontal = ScreenPadding),
+        )
+        Spacer(Modifier.height(8.dp))
 
-            if (filtered.isEmpty()) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(
-                        "No app matches \"$query\".",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        if (filtered.isEmpty()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text(
+                    "No app matches \"$query\".",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        } else {
+            LazyColumn(
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+            ) {
+                items(filtered, key = { it.packageName }) { launchable ->
+                    AppRow(
+                        launchable = launchable,
+                        isLocked   = launchable.packageName in activeLocks,
+                        onClick    = { onSelect(launchable) },
                     )
-                }
-            } else {
-                LazyColumn(
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                    contentPadding      = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
-                ) {
-                    items(filtered, key = { it.packageName }) { launchable ->
-                        AppRow(
-                            launchable = launchable,
-                            isLocked   = launchable.packageName in activeLocks,
-                            onClick    = { onSelect(launchable) },
-                        )
-                    }
                 }
             }
         }
@@ -191,48 +175,28 @@ private fun AppRow(launchable: LaunchableApp, isLocked: Boolean, onClick: () -> 
     Row(
         modifier          = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(18.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 10.dp),
+            .padding(horizontal = 8.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        AppIcon(identity, size = 40)
-        Spacer(Modifier.width(12.dp))
+        AppIcon(identity, size = 44)
+        Spacer(Modifier.width(14.dp))
         Text(
             launchable.label,
-            style      = MaterialTheme.typography.bodyLarge,
+            style      = MaterialTheme.typography.titleSmall,
             maxLines   = 1,
             overflow   = TextOverflow.Ellipsis,
             modifier   = Modifier.weight(1f),
         )
         if (isLocked) {
             Spacer(Modifier.width(8.dp))
-            Surface(shape = RoundedCornerShape(50), color = StatusColors.Success.copy(alpha = 0.15f)) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                ) {
-                    Icon(
-                        Icons.Filled.Lock,
-                        contentDescription = null,
-                        tint = StatusColors.Success,
-                        modifier = Modifier.height(12.dp),
-                    )
-                    Spacer(Modifier.width(4.dp))
-                    Text(
-                        "Locked",
-                        style      = MaterialTheme.typography.labelSmall,
-                        color      = StatusColors.Success,
-                        fontWeight = FontWeight.Bold,
-                    )
-                }
-            }
+            StatusPill("Locked", MaterialTheme.colorScheme.primary)
         }
     }
 }
 
 // ── step 2: choose a duration ──────────────────────────────────────────────────
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun DurationStep(
     target: LaunchableApp,
@@ -264,58 +228,30 @@ private fun DurationStep(
     val blockUntil = base + durationMs
     val isExtending = existingUntil != null
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title          = {
-                    Text(
-                        if (isExtending) "Extend lock" else "Lock for how long?",
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                },
-            )
-        },
-    ) { padding ->
-        Column(
-            Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp),
-        ) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState()),
+    ) {
+        ScreenHeader(
+            title  = if (isExtending) "Extend the lock" else "Lock for how long?",
+            onBack = onBack,
+        )
+        Column(Modifier.padding(horizontal = ScreenPadding)) {
             // ── what's being locked ───────────────────────────────────────────
-            Card(
-                modifier  = Modifier.fillMaxWidth(),
-                shape     = RoundedCornerShape(16.dp),
-                colors    = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
-                ),
-                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-            ) {
-                Row(
-                    modifier          = Modifier.padding(14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    AppIcon(identity, size = 44)
-                    Spacer(Modifier.width(12.dp))
+            Panel(contentPadding = PaddingValues(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    AppIcon(identity, size = 48)
+                    Spacer(Modifier.width(14.dp))
                     Column(Modifier.weight(1f)) {
-                        Text(
-                            identity.label,
-                            style      = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold,
-                        )
+                        Text(identity.label, style = MaterialTheme.typography.titleMedium)
                         Text(
                             if (existingUntil != null) {
                                 "Locked until ${formatUnlockAt(existingUntil)}"
                             } else {
-                                target.packageName
+                                "Not locked"
                             },
-                            style    = MaterialTheme.typography.labelSmall,
+                            style    = MaterialTheme.typography.bodySmall,
                             color    = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
@@ -324,15 +260,9 @@ private fun DurationStep(
                 }
             }
 
-            Spacer(Modifier.height(20.dp))
-
-            Text(
-                if (isExtending) "ADD TO THE LOCK" else "LOCK FOR",
-                style      = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.Bold,
-                color      = MaterialTheme.colorScheme.primary,
-            )
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(24.dp))
+            Eyebrow(if (isExtending) "Add to the lock" else "Lock for")
+            Spacer(Modifier.height(12.dp))
 
             DurationPresetPicker(
                 presetMs         = presetMs,
@@ -347,55 +277,25 @@ private fun DurationStep(
                 onSecondsChange  = { secondsText = it },
             )
 
-            Spacer(Modifier.height(20.dp))
+            Spacer(Modifier.height(24.dp))
 
             // The consequence, spelled out before the button rather than only in the dialog.
             if (durationMs > 0L) {
-                Column(
-                    Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.08f))
-                        .padding(16.dp),
-                ) {
-                    Text(
-                        "Unlocks at",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Text(
-                        formatUnlockAt(blockUntil),
-                        style      = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Bold,
-                        color      = MaterialTheme.colorScheme.primary,
-                    )
-                    Text(
-                        "That's ${formatDuration(blockUntil - System.currentTimeMillis())} from now.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+                UnlockPreview(blockUntil)
                 Spacer(Modifier.height(16.dp))
             }
 
-            Button(
+            PrimaryButton(
+                text     = if (isExtending) "Extend lock" else "Lock ${identity.label}",
                 onClick  = { confirming = true },
                 enabled  = durationMs > 0L,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(52.dp),
-                shape    = RoundedCornerShape(14.dp),
-            ) {
-                Text(
-                    if (isExtending) "Extend lock" else "Lock ${identity.label}",
-                    fontWeight = FontWeight.SemiBold,
-                )
-            }
+                modifier = Modifier.fillMaxWidth(),
+            )
 
             Spacer(Modifier.height(12.dp))
             Text(
                 "Once it starts there is no in-app way to end it early.",
-                style     = MaterialTheme.typography.labelSmall,
+                style     = MaterialTheme.typography.bodySmall,
                 color     = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
                 modifier  = Modifier.fillMaxWidth(),

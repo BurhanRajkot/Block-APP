@@ -2,27 +2,28 @@ package com.blockapp.android.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-// Warm paper and ink, with rust as the only accent. This app's job is to stand between the
-// user and an impulse — the palette should feel like a workshop, not a wellness card with
-// indigo circles. Neutrals are tinted toward the rust so surfaces stay related even when
-// there's no accent on screen.
+// Graphite with one electric accent. Dark-only on purpose: this app is opened at night, mid-
+// impulse, and it shares its look with the block wall (BlockOverlayActivity), which has to be
+// dark anyway. Volt marks the things the user does, Ember marks the reel counter, and nothing
+// else on screen is coloured, so both read at a glance.
 
-internal val Ink = Color(0xFF1C1914)
-internal val InkMuted = Color(0xFF5C564C)
-internal val Paper = Color(0xFFF3EDE3)
-internal val PaperRaised = Color(0xFFF8F3EA)
-internal val PaperInset = Color(0xFFE7DFD0)
-internal val Rule = Color(0xFFD4CBB8)
+internal val Ink950 = Color(0xFF0A0B0D) // window background
+internal val Ink900 = Color(0xFF111316) // low container
+internal val Ink850 = Color(0xFF15181C) // cards
+internal val Ink800 = Color(0xFF1C1F24) // raised: dialogs, chips, tracks
+internal val Ink700 = Color(0xFF262A31) // outlines
+internal val Ink600 = Color(0xFF353A42) // pressed / strong outline
 
-internal val Rust = Color(0xFF8C3A1E)
-internal val RustDeep = Color(0xFF3D180C)
-internal val RustWash = Color(0xFFEED9C8)
-internal val RustOnDark = Color(0xFFE2A07A)
-internal val RustOnDarkContainer = Color(0xFF5A2414)
+internal val Fog = Color(0xFFF2F3F5)
+internal val FogMuted = Color(0xFF8E949D)
+internal val FogFaint = Color(0xFF5D636C)
 
-internal val Night = Color(0xFF161410)
-internal val NightRaised = Color(0xFF1E1B16)
-internal val NightInset = Color(0xFF2A261F)
-internal val NightRule = Color(0xFF3D382E)
-internal val Cream = Color(0xFFEDE6D8)
-internal val CreamMuted = Color(0xFFB8AFA0)
+internal val Volt = Color(0xFFD7FF3A)
+internal val VoltDeep = Color(0xFF0E1200)
+internal val VoltWash = Color(0xFF232B0A)
+
+internal val Ember = Color(0xFFFF5A73)
+internal val EmberWash = Color(0xFF331820)
+
+/** Second chart series, only where two quantities share an axis (InsightsScreen). */
+internal val Sky = Color(0xFF6CC4FF)

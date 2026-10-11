@@ -1,12 +1,16 @@
 package com.blockapp.android.accessibility
 
 import android.accessibilityservice.AccessibilityService
+import android.animation.ValueAnimator
 import android.annotation.SuppressLint
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Point
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.text.SpannableString
+import android.text.Spanned
+import android.text.style.ForegroundColorSpan
 import android.hardware.display.DisplayManager
 import android.os.Build
 import android.util.TypedValue
@@ -14,6 +18,7 @@ import android.view.Display
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
+import android.view.animation.OvershootInterpolator
 import android.widget.FrameLayout
 import android.widget.TextView
 import com.blockapp.android.data.BlockRepository
@@ -28,9 +33,9 @@ import java.time.LocalDate
  * each time the total goes up, so the number is noticed at the moment it grows rather than
  * only later on HomeScreen.
  *
- * Shown by AppBlockAccessibilityService whenever ReelScrollDetector counts a reel, and hidden
- * when the detector sees that app scroll like a feed or a different app comes to the front.
- * Like the detector, it only observes and never acts on the foreground app.
+ * Shown and hidden by AppBlockAccessibilityService exactly as ReelTracker opens and closes a
+ * session (first reel on screen, then leaving the viewer, switching app, or screen-off). Like
+ * the tracker, it only observes and never acts on the foreground app.
  *
  * Drawn as a TYPE_ACCESSIBILITY_OVERLAY window, which an accessibility service may add without
  * the SYSTEM_ALERT_WINDOW permission. That only works through the service's own
@@ -42,7 +47,7 @@ import java.time.LocalDate
  * guarded: this is decoration, and an exception out of it must not reach the service that
  * enforces locks (CLAUDE.md invariant 9).
  *
- * The service only creates one from API 28, alongside the detector, but nothing here depends
+ * The service only creates one from API 28, alongside the tracker, but nothing here depends
  * on that except the cutout placement, which is guarded where it's used.
  */
 internal class ReelBubble(
@@ -55,6 +60,7 @@ internal class ReelBubble(
 
     private var root: FrameLayout? = null
     private var label: TextView? = null
+    private var pill: GradientDrawable? = null
     private var countJob: Job? = null
     private var countDay: LocalDate? = null
     private var shownTotal = -1
@@ -81,15 +87,33 @@ internal class ReelBubble(
         }
     }
 
-    fun hide() {
+    /**
+     * Shrinks and fades the pill out, then removes its window. [immediate] skips the animation,
+     * for the service unbinding: an end action that runs after the service is gone would be
+     * removing a window from a dead WindowManager.
+     */
+    fun hide(immediate: Boolean = false) {
         countJob?.cancel()
         countJob = null
         countDay = null
         shownTotal = -1
         shownFor = null
         val view = root ?: return
+        val text = label
         root = null
         label = null
+        pill = null
+        if (immediate || text == null) {
+            remove(view)
+            return
+        }
+        text.animate().cancel()
+        text.animate().scaleX(EXIT_SCALE).scaleY(EXIT_SCALE).setDuration(EXIT_MS).start()
+        view.animate().cancel()
+        view.animate().alpha(0f).setDuration(EXIT_MS).withEndAction { remove(view) }.start()
+    }
+
+    private fun remove(view: View) {
         try {
             windowManager.removeViewImmediate(view)
         } catch (e: IllegalArgumentException) {
@@ -108,10 +132,14 @@ internal class ReelBubble(
             minWidth = heightPx
             includeFontPadding = false
             setPadding(dp(PADDING_H_DP), 0, dp(PADDING_H_DP), 0)
-            background = GradientDrawable().apply {
+            background = GradientDrawable().also { pill = it }.apply {
                 cornerRadius = heightPx / 2f
                 setColor(BUBBLE_COLOR)
+                // A hairline edge keeps the pill readable against a black video or status bar,
+                // where a dark fill alone would disappear.
+                setStroke(dp(1).coerceAtLeast(1), STROKE_COLOR)
             }
+            letterSpacing = 0.02f
         }
         // The pill hops by scaling past its own size. A window clips to its bounds, so the
         // wrapper leaves margin all round; without it the hop is cut off square at the edges.
@@ -153,6 +181,15 @@ internal class ReelBubble(
             // counter itself still works, and the next counted reel tries again.
             return false
         }
+        // Pops in from small with a little overshoot, so its arrival is noticed at the edge of
+        // vision without anything flashing.
+        text.scaleX = ENTER_SCALE
+        text.scaleY = ENTER_SCALE
+        text.animate()
+            .scaleX(1f).scaleY(1f)
+            .setInterpolator(OvershootInterpolator(ENTER_OVERSHOOT))
+            .setDuration(ENTER_MS)
+            .start()
         wrapper.animate().alpha(1f).setDuration(FADE_MS).start()
         root = wrapper
         label = text
@@ -163,11 +200,20 @@ internal class ReelBubble(
     @SuppressLint("SetTextI18n")
     private fun render(total: Int) {
         val text = label ?: return
-        text.text = "$PLAY_GLYPH $total"
+        text.text = SpannableString("$PLAY_GLYPH $total").apply {
+            setSpan(
+                ForegroundColorSpan(GLYPH_COLOR),
+                0,
+                PLAY_GLYPH.length,
+                Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
+            )
+        }
         // Only hop on an increase seen while showing, not on the first value after appearing.
         // Otherwise every reappearance would hop even though nothing new was counted.
         if (shownTotal in 0 until total) {
+            flash()
             text.animate().cancel()
+            text.animate().setInterpolator(null)
             text.animate()
                 .scaleX(HOP_SCALE).scaleY(HOP_SCALE)
                 .setDuration(HOP_MS)
@@ -177,6 +223,16 @@ internal class ReelBubble(
                 .start()
         }
         shownTotal = total
+    }
+
+    /** Fills the pill with the reel accent for a moment and fades it back to near-black. */
+    private fun flash() {
+        val drawable = pill ?: return
+        ValueAnimator.ofArgb(GLYPH_COLOR, BUBBLE_COLOR).apply {
+            duration = FLASH_MS
+            addUpdateListener { drawable.setColor(it.animatedValue as Int) }
+            start()
+        }
     }
 
     /**
@@ -213,9 +269,9 @@ internal class ReelBubble(
          * Small enough to fit beside the camera inside a typical 24-32dp status bar, big enough
          * for three digits at [TEXT_SIZE_SP].
          */
-        const val BUBBLE_HEIGHT_DP = 20
-        const val TEXT_SIZE_SP = 10f
-        const val PADDING_H_DP = 7
+        const val BUBBLE_HEIGHT_DP = 22
+        const val TEXT_SIZE_SP = 11f
+        const val PADDING_H_DP = 8
 
         /** Space between the camera cutout's right edge and the pill. */
         const val CAMERA_GAP_DP = 6
@@ -235,13 +291,29 @@ internal class ReelBubble(
 
         const val FADE_MS = 180L
 
+        /** Pop-in: starts at this scale and overshoots slightly past full size. */
+        const val ENTER_SCALE = 0.4f
+        const val ENTER_OVERSHOOT = 2.2f
+        const val ENTER_MS = 340L
+
+        /** Exit: shrinks to this while fading, then the window is removed. */
+        const val EXIT_SCALE = 0.6f
+        const val EXIT_MS = 170L
+
+        /** How long the accent fill takes to fade back after a new reel. */
+        const val FLASH_MS = 550L
+
         /**
          * U+25B6 plus the text-presentation selector. Bare U+25B6 renders as a colour emoji
          * on most devices, which is too big and too loud at this size.
          */
         const val PLAY_GLYPH = "\u25B6\uFE0E"
 
-        /** Near-black at ~80% opacity, so it reads over both a bright video and a dark one. */
-        const val BUBBLE_COLOR = 0xCC111111.toInt()
+        /** Near-black at ~88% opacity, so it reads over both a bright video and a dark one. */
+        const val BUBBLE_COLOR = 0xE00B0C0E.toInt()
+        const val STROKE_COLOR = 0x33FFFFFF
+
+        /** The app's reel accent (Ember in ui/theme/Color.kt), so the pill reads as this app's. */
+        const val GLYPH_COLOR = 0xFFFF5A73.toInt()
     }
 }

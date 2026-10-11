@@ -39,11 +39,18 @@ interface BlockDao {
     @Query("SELECT * FROM reel_counts WHERE day = :day ORDER BY reels DESC")
     fun observeReelCounts(day: String): Flow<List<ReelCountEntity>>
 
+    @Query(
+        "SELECT day, SUM(reels) AS reels, SUM(watchMs) AS watchMs FROM reel_counts " +
+            "WHERE day >= :fromDay GROUP BY day ORDER BY day ASC",
+    )
+    fun observeReelHistory(fromDay: String): Flow<List<ReelDayTotal>>
+
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertReelCountIfAbsent(entity: ReelCountEntity)
 
     @Query(
-        "UPDATE reel_counts SET reels = reels + :count WHERE day = :day AND packageName = :packageName",
+        "UPDATE reel_counts SET reels = reels + :count, watchMs = watchMs + :watchMs " +
+            "WHERE day = :day AND packageName = :packageName",
     )
-    suspend fun incrementReelCount(day: String, packageName: String, count: Int)
+    suspend fun incrementReelCount(day: String, packageName: String, count: Int, watchMs: Long)
 }

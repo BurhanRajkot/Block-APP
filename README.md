@@ -58,33 +58,46 @@ determined bypass.
 
 ## Locking an app
 
-Home screen → **+** → pick an app → enter a duration in hours → "Lock it". It disappears from
+Today tab → **Lock an app** → pick an app → pick a duration → confirm. (Or tap the lock icon
+next to any app in your screen-time list.) It disappears from
 the active list on its own once the timer expires (handled by an exact alarm, re-armed on
 reboot).
 
 ## Reels counter
 
-The top of the Home screen shows how many short-form videos (Reels, Shorts, TikToks, …) you've
-swiped through today, with the top few apps underneath. It reads scroll events from the same
+The Today tab shows how many short-form videos (Reels, Shorts, TikToks, Reddit/LinkedIn video
+feeds, …) you've swiped through today, roughly how long you spent on them, and the top few apps.
+Insights has the per-app breakdown and the last 7 days. It reads screen events from the same
 Accessibility Service, only counts, never blocks anything, and stays on the phone like
 everything else.
 
-It works on Android 9+ and has no per-app list. Instead it recognises a full-screen vertical
-pager, one that always comes to rest exactly one screen-height per swipe, and only starts
-counting after two such swipes in a row. That keeps ordinary feed scrolling out of the count,
-and the trade-off is that it undercounts rather than overcounts:
+It works on Android 9+ and has no per-app list. It recognises a reel viewer by shape: a
+full-screen vertical pager showing exactly one video at a time, which comes to rest exactly one
+screen-height per swipe. When the app also labels that pager as a pager (most do), it's
+recognised on the first video, before you swipe. Otherwise the first page-sized swipe confirms
+it. Ordinary feed scrolling ends a session instead of counting.
 
-- A session of just one or two reels never gets confirmed, so it isn't counted.
 - Rewatching (swiping back, then forward again) doesn't count a reel twice.
-- A viewer whose pages don't fill the container (peeking previews), or a Compose app that
-  doesn't report scroll distances, won't be counted at all.
+- Coming back to the same reel (from comments, the notification shade, another app) doesn't
+  count it again.
+- Time is the gap between reels, capped at 3 minutes per reel, so a phone left on one video
+  doesn't log an hour.
+- A viewer whose pages don't fill the screen (peeking previews) won't be counted.
 
-Treat it as a rough daily signal, not an exact tally.
+Treat it as a rough daily signal, not an exact tally. To see why something did or didn't count,
+run `adb logcat -s ReelTracker` while scrolling.
 
 While you're in a reel viewer, the same total also floats in a tiny bubble at the top of the
 screen, just right of the front camera, and hops each time it goes up. It disappears when you
-leave for another app or scroll the app's normal feed. It can't be tapped, so it never gets in
+leave the viewer, switch apps, or turn the screen off. It can't be tapped, so it never gets in
 the way of the app underneath.
+
+## Screen time
+
+Insights (and the Today tab) show time per app, an hour-by-hour chart, how many times each app was
+opened, and phone unlocks, for today and the past week. This needs **Usage access** (Settings →
+Special app access), which only reads how long apps were in front. Tap the lock icon on any app
+row to lock that app straight away.
 
 ## Generating an unlock key
 
