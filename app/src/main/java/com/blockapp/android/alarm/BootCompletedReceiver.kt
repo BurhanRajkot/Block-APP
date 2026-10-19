@@ -18,6 +18,7 @@ class BootCompletedReceiver : BroadcastReceiver() {
                     AlarmScheduler.schedule(context, entity.packageName, entity.blockUntil)
                 }
             }
+            AlarmScheduler.scheduleDailyArchive(context)
             pendingResult.finish()
         }
     }

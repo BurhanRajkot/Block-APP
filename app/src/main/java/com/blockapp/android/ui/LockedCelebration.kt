@@ -40,7 +40,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -69,7 +68,6 @@ data class LockedSummary(
 @Composable
 internal fun LockedCelebration(summary: LockedSummary, onFinished: () -> Unit) {
     val haptics = LocalHapticFeedback.current
-    val context = LocalContext.current
     val scrim = remember { Animatable(0f) }
     val badge = remember { Animatable(0f) }
     val burst = remember { Animatable(0f) }
@@ -172,7 +170,7 @@ internal fun LockedCelebration(summary: LockedSummary, onFinished: () -> Unit) {
                     Spacer(Modifier.height(16.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy((-8).dp)) {
                         summary.packageNames.take(MAX_ICONS).forEach { pkg ->
-                            val identity = remember(pkg) { loadAppIdentity(context, pkg) }
+                            val identity = rememberAppIdentity(pkg)
                             AppIcon(identity, size = 32)
                         }
                     }

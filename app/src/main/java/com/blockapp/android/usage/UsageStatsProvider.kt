@@ -66,7 +66,7 @@ object UsageStatsProvider {
      * yesterday, and the buckets can't be split by hour at all. Replaying events gives exact
      * per-day and per-hour numbers and an open count.
      *
-     * Only launchable apps are reported (see [InstalledAppsProvider.listLaunchableApps], which
+     * Only launchable apps are reported (see [InstalledAppsProvider.launchablePackages], which
      * also drops this app and the protected system packages). Every package still takes part
      * in the replay, though. Pressing home must end the previous app's session even though the
      * launcher itself is never listed.
@@ -81,8 +81,9 @@ object UsageStatsProvider {
         val rangeStart = firstDay.atStartOfDay(zone).toInstant().toEpochMilli()
         val now = System.currentTimeMillis()
 
-        val labels = InstalledAppsProvider.listLaunchableApps(context)
-            .associate { it.packageName to it.label }
+        // Packages only. Labels are resolved for the few apps that end up in the result, not
+        // for every installed app (see InstalledAppsProvider.label for why that matters).
+        val launchable = InstalledAppsProvider.launchablePackages(context)
         val acc = Array(days) { DayAccumulator() }
 
         fun dayIndex(millis: Long): Int =
@@ -91,7 +92,7 @@ object UsageStatsProvider {
 
         // Splits [start, end) at local hour boundaries, which also splits it at midnight.
         fun record(pkg: String, start: Long, end: Long) {
-            if (pkg !in labels) return
+            if (pkg !in launchable) return
             var cursor = maxOf(start, rangeStart)
             val stop = minOf(end, now)
             while (cursor < stop) {
@@ -143,6 +144,16 @@ object UsageStatsProvider {
             val at = event.timeStamp
             when (event.eventType) {
                 EVENT_RESUMED -> {
+                    // A different app coming to the front ends whatever was in front before.
+                    // The pause for it is usually already in the stream, but not always (a
+                    // process killed in the background, events dropped under load), and without
+                    // this the old app went on accumulating time in parallel with the new one
+                    // until the screen next turned off. Split-screen, where two apps are really
+                    // both resumed, is undercounted instead, which is the better error here.
+                    sessionStart.keys.filter { it != pkg }.forEach { other ->
+                        resumed.remove(other)
+                        endSession(other, at)
+                    }
                     val activities = resumed.getOrPut(pkg) { HashSet() }
                     activities += event.className.orEmpty()
                     if (pkg !in sessionStart) {
@@ -150,7 +161,7 @@ object UsageStatsProvider {
                         // A quick hop between two activities of one app (pause, then resume a
                         // moment later) is the same visit, not a second open.
                         val sameVisit = pkg == lastEndedPackage && at - lastEndedAt < REOPEN_GAP_MS
-                        if (!sameVisit && at >= rangeStart && pkg in labels) {
+                        if (!sameVisit && at >= rangeStart && pkg in launchable) {
                             val index = dayIndex(at)
                             if (index in 0 until days) {
                                 val day = acc[index]
@@ -184,7 +195,7 @@ object UsageStatsProvider {
                 apps = day.millis
                     .filterValues { it >= MIN_REPORTED_MS }
                     .map { (pkg, millis) ->
-                        AppUsage(pkg, labels.getValue(pkg), millis, day.opens[pkg] ?: 0)
+                        AppUsage(pkg, InstalledAppsProvider.label(context, pkg), millis, day.opens[pkg] ?: 0)
                     }
                     .sortedByDescending { it.foregroundMillis },
                 hourly = day.hourly,

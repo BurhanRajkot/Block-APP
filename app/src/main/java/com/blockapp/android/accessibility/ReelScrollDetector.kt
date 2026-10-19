@@ -44,7 +44,8 @@ internal class ScrollBurst(
  */
 internal class ReelScrollDetector(
     private val handler: Handler,
-    private val ignoredPackages: Set<String>,
+    /** Only these packages' scrolls are measured; see ReelApps.KNOWN. */
+    private val trackedPackages: Set<String>,
     private val onBurst: (ScrollBurst) -> Unit,
 ) {
     private var node: AccessibilityNodeInfo? = null
@@ -60,7 +61,7 @@ internal class ReelScrollDetector(
     @RequiresApi(Build.VERSION_CODES.P)
     fun onScrolled(event: AccessibilityEvent, screenWidth: Int, screenHeight: Int) {
         val pkg = event.packageName?.toString() ?: return
-        if (pkg in ignoredPackages) return
+        if (pkg !in trackedPackages) return
         val deltaY = event.scrollDeltaY
         // Zero-delta events carry no distance. Returning before getSource() also skips a binder
         // call per horizontal scroll event.

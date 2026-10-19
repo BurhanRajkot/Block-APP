@@ -54,6 +54,8 @@ internal class ReelBubble(
     private val service: AccessibilityService,
     private val repository: BlockRepository,
     private val scope: CoroutineScope,
+    /** Today's reel limit (util/ReelLimit), or null. With one set, the pill reads "87/100". */
+    private val limitProvider: () -> Int?,
 ) {
     private val windowManager = service.getSystemService(WindowManager::class.java)
     private val density = service.resources.displayMetrics.density
@@ -61,6 +63,7 @@ internal class ReelBubble(
     private var root: FrameLayout? = null
     private var label: TextView? = null
     private var pill: GradientDrawable? = null
+    private var restingColor = BUBBLE_COLOR
     private var countJob: Job? = null
     private var countDay: LocalDate? = null
     private var shownTotal = -1
@@ -200,7 +203,9 @@ internal class ReelBubble(
     @SuppressLint("SetTextI18n")
     private fun render(total: Int) {
         val text = label ?: return
-        text.text = SpannableString("$PLAY_GLYPH $total").apply {
+        val limit = limitProvider()
+        val figure = if (limit != null) "$total/$limit" else "$total"
+        text.text = SpannableString("$PLAY_GLYPH $figure").apply {
             setSpan(
                 ForegroundColorSpan(GLYPH_COLOR),
                 0,
@@ -210,6 +215,9 @@ internal class ReelBubble(
         }
         // Only hop on an increase seen while showing, not on the first value after appearing.
         // Otherwise every reappearance would hop even though nothing new was counted.
+        // Near or past the limit the pill stays tinted red, so the warning holds between reels
+        // instead of only flashing on each one.
+        restingColor = if (limit != null && total >= limit * NEAR_LIMIT_SHARE) NEAR_LIMIT_COLOR else BUBBLE_COLOR
         if (shownTotal in 0 until total) {
             flash()
             text.animate().cancel()
@@ -221,6 +229,8 @@ internal class ReelBubble(
                     text.animate().scaleX(1f).scaleY(1f).setDuration(HOP_MS).start()
                 }
                 .start()
+        } else {
+            pill?.setColor(restingColor)
         }
         shownTotal = total
     }
@@ -228,7 +238,7 @@ internal class ReelBubble(
     /** Fills the pill with the reel accent for a moment and fades it back to near-black. */
     private fun flash() {
         val drawable = pill ?: return
-        ValueAnimator.ofArgb(GLYPH_COLOR, BUBBLE_COLOR).apply {
+        ValueAnimator.ofArgb(GLYPH_COLOR, restingColor).apply {
             duration = FLASH_MS
             addUpdateListener { drawable.setColor(it.animatedValue as Int) }
             start()
@@ -309,11 +319,15 @@ internal class ReelBubble(
          */
         const val PLAY_GLYPH = "\u25B6\uFE0E"
 
-        /** Near-black at ~88% opacity, so it reads over both a bright video and a dark one. */
-        const val BUBBLE_COLOR = 0xE00B0C0E.toInt()
+        /** Graphite at ~88% opacity, so it reads over both a bright video and a dark one. */
+        const val BUBBLE_COLOR = 0xE00E0F0C.toInt()
         const val STROKE_COLOR = 0x33FFFFFF
 
+        /** From this share of the limit on, the pill rests on [NEAR_LIMIT_COLOR]. */
+        const val NEAR_LIMIT_SHARE = 0.9f
+        const val NEAR_LIMIT_COLOR = 0xE8701426.toInt()
+
         /** The app's reel accent (Ember in ui/theme/Color.kt), so the pill reads as this app's. */
-        const val GLYPH_COLOR = 0xFFFF5A73.toInt()
+        const val GLYPH_COLOR = 0xFFFF7A3D.toInt()
     }
 }

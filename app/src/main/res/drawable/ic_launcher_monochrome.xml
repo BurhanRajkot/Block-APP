@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 13+ themed icon: the system tints this layer and ignores its colours, so the pause
+     bars are cut out of the card (evenOdd) rather than painted on it. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M46,31h16a8,8 0,0 1,8 8v30a8,8 0,0 1,-8 8h-16a8,8 0,0 1,-8 -8v-30a8,8 0,0 1,8 -8z M49.75,44a2.75,2.75 0,0 1,2.75 2.75v14.5a2.75,2.75 0,0 1,-5.5 0v-14.5a2.75,2.75 0,0 1,2.75 -2.75z M58.25,44a2.75,2.75 0,0 1,2.75 2.75v14.5a2.75,2.75 0,0 1,-5.5 0v-14.5a2.75,2.75 0,0 1,2.75 -2.75z" />
+</vector>

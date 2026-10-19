@@ -59,7 +59,7 @@ internal fun Reveal(index: Int, modifier: Modifier = Modifier, content: @Composa
     LaunchedEffect(Unit) {
         if (done) return@LaunchedEffect
         delay(index.coerceAtMost(MAX_STAGGERED) * STAGGER_MS)
-        progress.animateTo(1f, spring(dampingRatio = 0.82f, stiffness = Spring.StiffnessMediumLow))
+        progress.animateTo(1f, spring(dampingRatio = 0.86f, stiffness = REVEAL_STIFFNESS))
         done = true
     }
     Box(
@@ -67,7 +67,7 @@ internal fun Reveal(index: Int, modifier: Modifier = Modifier, content: @Composa
             val p = progress.value
             alpha = p.coerceIn(0f, 1f)
             translationY = (1f - p) * REVEAL_LIFT_DP.dp.toPx()
-            val scale = 0.97f + 0.03f * p
+            val scale = 0.96f + 0.04f * p
             scaleX = scale
             scaleY = scale
         },
@@ -201,10 +201,21 @@ internal fun PulsingDot(color: Color, size: Dp = 7.dp) {
     }
 }
 
-/** Delay between staggered siblings. Short enough that a full screen lands in under half a second. */
-private const val STAGGER_MS = 55L
-private const val MAX_STAGGERED = 7
-private const val REVEAL_LIFT_DP = 22
+/**
+ * Delay between staggered siblings. A full screen lands in about a quarter of a second: a longer
+ * cascade was part of why the app *felt* slow to open even once the frames were fast, since the
+ * last card was still arriving half a second after launch.
+ */
+private const val STAGGER_MS = 40L
+private const val MAX_STAGGERED = 6
+
+/**
+ * How far a card rises as it arrives, and how briskly. 14dp at medium-low stiffness was so
+ * slight on a phone that the screens read as having no motion at all; this is enough to see
+ * without the cascade dragging (see STAGGER_MS).
+ */
+private const val REVEAL_LIFT_DP = 28
+private const val REVEAL_STIFFNESS = 260f
 private const val COUNT_MS = 900
 private const val ROLL_MS = 260
 private const val PULSE_MS = 1_800

@@ -13,16 +13,76 @@ import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toBitmap
+import com.blockapp.android.util.InstalledAppsProvider
+import com.blockapp.android.util.LaunchableApp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
-/** Display name and launcher icon for a package, as resolved from PackageManager. */
-internal data class AppIdentity(val label: String, val icon: ImageBitmap?)
+/**
+ * Display name and launcher icon for a package, as resolved from PackageManager. [isPlaceholder]
+ * marks the stand-in [rememberAppIdentity] returns for the frame or two before the real one has
+ * been decoded off the main thread.
+ */
+internal data class AppIdentity(
+    val label: String,
+    val icon: ImageBitmap?,
+    val isPlaceholder: Boolean = false,
+)
+
+/**
+ * [loadAppIdentity] for composables: a cache hit is returned in the same frame, and a miss is
+ * decoded on [Dispatchers.IO] while a placeholder (neutral tile, label from the cheap label cache
+ * if it is already there) is drawn. Calling loadAppIdentity inside `remember {}` did that decode
+ * on the main thread, once per row, which is what made the first scroll of the app picker and
+ * the first frame of Home stutter.
+ */
+@Composable
+internal fun rememberAppIdentity(packageName: String): AppIdentity {
+    val context = LocalContext.current
+    val cached = remember(packageName) { cache.get(packageName) }
+    if (cached != null) return cached
+    val state = produceState(
+        initialValue = AppIdentity(label = "", icon = null, isPlaceholder = true),
+        key1 = packageName,
+    ) {
+        value = withContext(Dispatchers.IO) { loadAppIdentity(context, packageName) }
+    }
+    return state.value
+}
+
+/**
+ * The launchable apps, loaded off the main thread. Null only on the very first load in a process;
+ * after that the previous list is shown at once and silently replaced by a fresh one, so the
+ * picker opens instantly the second time and still picks up an app installed in between.
+ */
+@Composable
+internal fun rememberLaunchableApps(): List<LaunchableApp>? {
+    val context = LocalContext.current
+    val state = produceState(initialValue = lastAppList) {
+        val fresh = withContext(Dispatchers.IO) {
+            // A PackageManager failure leaves the old list (or the loading state) in place
+            // rather than crashing the screen.
+            runCatching { InstalledAppsProvider.listLaunchableApps(context) }.getOrNull()
+        }
+        if (fresh != null) {
+            lastAppList = fresh
+            value = fresh
+        }
+    }
+    return state.value
+}
+
+@Volatile private var lastAppList: List<LaunchableApp>? = null
 
 /**
  * Resolves [packageName] to something showable, memoised in [cache] for the life of the process.
@@ -45,7 +105,7 @@ internal fun loadAppIdentity(context: Context, packageName: String): AppIdentity
     val identity = try {
         val info = pm.getApplicationInfo(packageName, 0)
         AppIdentity(
-            label = pm.getApplicationLabel(info).toString(),
+            label = InstalledAppsProvider.label(context, packageName),
             icon = pm.getApplicationIcon(info).toBitmap(ICON_PX, ICON_PX).asImageBitmap(),
         )
     } catch (e: PackageManager.NameNotFoundException) {
@@ -63,7 +123,14 @@ internal fun loadAppIdentity(context: Context, packageName: String): AppIdentity
  */
 @Composable
 internal fun AppIcon(identity: AppIdentity, size: Int) {
-    if (identity.icon != null) {
+    if (identity.isPlaceholder) {
+        Box(
+            Modifier
+                .size(size.dp)
+                .clip(IconShape)
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh),
+        )
+    } else if (identity.icon != null) {
         Image(
             bitmap = identity.icon,
             contentDescription = null,

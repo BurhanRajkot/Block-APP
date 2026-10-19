@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Auto Backup and device-to-device transfer on Android 12+ (android:dataExtractionRules).
+     Same contents as backup_rules.xml; see the note there for why each part is kept. Backups go
+     to the user's own Google account through the system's backup service. The app itself still
+     has no network permission (CLAUDE.md invariant 8). -->
+<data-extraction-rules>
+    <cloud-backup>
+        <include domain="database" path="." />
+        <include domain="sharedpref" path="." />
+    </cloud-backup>
+    <device-transfer>
+        <include domain="database" path="." />
+        <include domain="sharedpref" path="." />
+    </device-transfer>
+</data-extraction-rules>

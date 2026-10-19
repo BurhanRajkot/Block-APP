@@ -13,7 +13,9 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
@@ -21,7 +23,7 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Insights
+import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Today
 import androidx.compose.material3.Icon
@@ -39,26 +41,35 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.blockapp.android.admin.DeviceAdminHelper
 import com.blockapp.android.ui.AppPickerScreen
 import com.blockapp.android.ui.FocusModeScreen
 import com.blockapp.android.ui.HomeScreen
-import com.blockapp.android.ui.InsightsScreen
+import com.blockapp.android.ui.HistoryScreen
 import com.blockapp.android.ui.LockedCelebration
 import com.blockapp.android.ui.LockedSummary
 import com.blockapp.android.ui.OnboardingScreen
+import com.blockapp.android.ui.PlanScreen
+import com.blockapp.android.ui.QuizScreen
 import com.blockapp.android.ui.RemoveProtectionScreen
 import com.blockapp.android.ui.SettingsScreen
 import com.blockapp.android.ui.UnlockKeyScreen
 import com.blockapp.android.ui.theme.BlockAppTheme
+import com.blockapp.android.util.ReelPlan
+import java.time.LocalDate
 
 private sealed class Screen {
     data object Home : Screen()
-    data object Insights : Screen()
+
+    /** [day] opens straight on that day; null opens the month view. */
+    data class History(val day: LocalDate? = null) : Screen()
     data object Settings : Screen()
     data object Onboarding : Screen()
+    data object Quiz : Screen()
+    data object Plan : Screen()
     data object FocusMode : Screen()
     data object UnlockKey : Screen()
     data object RemoveProtection : Screen()
@@ -72,7 +83,10 @@ private sealed class Screen {
 }
 
 /** The bottom-bar destinations. Every other screen hides the bar while it is open. */
-private val Tabs = listOf(Screen.Home, Screen.Insights, Screen.Settings)
+private val Tabs = listOf(Screen.Home, Screen.History(), Screen.Settings)
+
+/** History is a tab whichever day it was opened on. */
+private fun Screen.isTab(): Boolean = this is Screen.Home || this is Screen.History || this is Screen.Settings
 
 /**
  * Where the system back gesture goes from each screen. A fixed parent per screen rather than a
@@ -84,10 +98,12 @@ private val Tabs = listOf(Screen.Home, Screen.Insights, Screen.Settings)
  */
 private fun Screen.parent(): Screen = when (this) {
     Screen.Home -> Screen.Home
-    Screen.Insights -> Screen.Home
+    is Screen.History -> Screen.Home
     Screen.Settings -> Screen.Home
     Screen.FocusMode -> Screen.Home
     Screen.UnlockKey -> Screen.Home
+    Screen.Quiz -> Screen.Home
+    Screen.Plan -> Screen.Home
     is Screen.AppPicker -> returnTo
     Screen.Onboarding -> Screen.Settings
     Screen.RemoveProtection -> Screen.Settings
@@ -123,14 +139,14 @@ class MainActivity : ComponentActivity() {
 private fun AppRoot() {
     val context = LocalContext.current
 
-    // A first launch (or a launch after Accessibility/admin was stripped) opens straight on
-    // setup instead of on Home. Home's red banner is easy to skim past, and until both required
-    // permissions are on the app silently blocks nothing at all — which reads as "the app is
-    // broken", not "setup isn't finished".
+    // A first launch opens on the quiz, which builds the reel plan, then goes on to setup. A
+    // later launch after Accessibility/admin was stripped opens straight on setup instead of on
+    // Home. Home's red banner is easy to skim past, and until both required permissions are on
+    // the app silently blocks nothing at all — which reads as "the app is broken", not "setup
+    // isn't finished".
+    fun afterQuiz(): Screen = if (DeviceAdminHelper.requiresSetup(context)) Screen.Onboarding else Screen.Home
     var screen by remember {
-        mutableStateOf<Screen>(
-            if (DeviceAdminHelper.requiresSetup(context)) Screen.Onboarding else Screen.Home,
-        )
+        mutableStateOf(if (!ReelPlan.quizSeen(context)) Screen.Quiz else afterQuiz())
     }
 
     // Without this, back from any sub-screen or tab leaves the app entirely — which on this app means
@@ -146,7 +162,7 @@ private fun AppRoot() {
         containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
             AnimatedVisibility(
-                visible = screen in Tabs,
+                visible = screen.isTab(),
                 enter = slideInVertically { it } + fadeIn(),
                 exit = slideOutVertically { it } + fadeOut(),
             ) {
@@ -160,19 +176,27 @@ private fun AppRoot() {
             transitionSpec = {
                 val from = initialState.depth()
                 val to = targetState.depth()
+                // Springs rather than fixed-length tweens, so a screen decelerates into place
+                // instead of stopping dead at 320ms, which is most of what made navigation feel
+                // stiff. Offsets are springs too, and fades stay short tweens so nothing lingers
+                // half-transparent.
+                val slide = spring<IntOffset>(dampingRatio = 0.9f, stiffness = SCREEN_STIFFNESS)
                 when {
-                    // Between tabs: a quick crossfade with a hint of zoom, no direction implied.
-                    from == 0 && to == 0 ->
-                        (fadeIn(tween(240, delayMillis = 60)) + scaleIn(tween(240, delayMillis = 60), initialScale = 0.98f))
-                            .togetherWith(fadeOut(tween(120)))
+                    // Between tabs: a short glide in the direction of the tab tapped, so the
+                    // bar's order and the motion agree.
+                    from == 0 && to == 0 -> {
+                        val dir = if (targetState.tabIndex() >= initialState.tabIndex()) 1 else -1
+                        (slideInHorizontally(slide) { dir * it / 12 } + fadeIn(tween(200, delayMillis = 40)))
+                            .togetherWith(slideOutHorizontally(slide) { -dir * it / 12 } + fadeOut(tween(120)))
+                    }
                     // Deeper: the new screen slides in from the right over the old one.
                     to > from ->
-                        (slideInHorizontally(tween(320)) { it / 3 } + fadeIn(tween(220)))
-                            .togetherWith(slideOutHorizontally(tween(320)) { -it / 10 } + fadeOut(tween(180)))
+                        (slideInHorizontally(slide) { it / 4 } + fadeIn(tween(220)) + scaleIn(spring(stiffness = SCREEN_STIFFNESS), initialScale = 0.98f))
+                            .togetherWith(slideOutHorizontally(slide) { -it / 8 } + fadeOut(tween(160)))
                     // Back out: the reverse.
                     else ->
-                        (slideInHorizontally(tween(320)) { -it / 10 } + fadeIn(tween(220)))
-                            .togetherWith(slideOutHorizontally(tween(320)) { it / 3 } + fadeOut(tween(180)))
+                        (slideInHorizontally(slide) { -it / 8 } + fadeIn(tween(220)))
+                            .togetherWith(slideOutHorizontally(slide) { it / 4 } + fadeOut(tween(160)) + scaleOut(tween(200), targetScale = 0.98f))
                 }
             },
             label = "screen",
@@ -182,15 +206,23 @@ private fun AppRoot() {
                     onFocusMode = { screen = Screen.FocusMode },
                     onAddLock = { screen = Screen.AppPicker() },
                     onLockApp = { screen = Screen.AppPicker(it, returnTo = Screen.Home) },
-                    onInsights = { screen = Screen.Insights },
+                    onHistory = { screen = Screen.History(it) },
+                    onPlan = { screen = Screen.Plan },
                     onFixSetup = { screen = Screen.Onboarding },
                 )
-                Screen.Insights -> InsightsScreen(
-                    onLockApp = { screen = Screen.AppPicker(it, returnTo = Screen.Insights) },
+                is Screen.History -> HistoryScreen(
+                    initialDay = target.day,
+                    onLockApp = { screen = Screen.AppPicker(it, returnTo = target) },
+                )
+                Screen.Quiz -> QuizScreen(onDone = { screen = afterQuiz() })
+                Screen.Plan -> PlanScreen(
+                    onBack = { screen = Screen.Home },
+                    onRebuild = { screen = Screen.Quiz },
                 )
                 Screen.Settings -> SettingsScreen(
                     onPermissions = { screen = Screen.Onboarding },
-                    onInsights = { screen = Screen.Insights },
+                    onHistory = { screen = Screen.History() },
+                    onPlan = { screen = Screen.Plan },
                     onEnterKey = { screen = Screen.UnlockKey },
                     onRemoveProtection = { screen = Screen.RemoveProtection },
                 )
@@ -227,9 +259,19 @@ private fun AppRoot() {
     }
 }
 
+/** A tab's position in the bottom bar, for the direction a tab switch slides. */
+private fun Screen.tabIndex(): Int = when (this) {
+    Screen.Home -> 0
+    is Screen.History -> 1
+    else -> 2
+}
+
+/** Spring stiffness of screen changes: settles in about 300ms, with no visible bounce. */
+private const val SCREEN_STIFFNESS = 500f
+
 /** How deep a screen sits, which decides the direction screens slide in [AppRoot]. */
 private fun Screen.depth(): Int = when (this) {
-    Screen.Home, Screen.Insights, Screen.Settings -> 0
+    Screen.Home, is Screen.History, Screen.Settings -> 0
     Screen.RemoveProtection -> 2
     else -> 1
 }
@@ -242,12 +284,12 @@ private fun BottomBar(current: Screen, onSelect: (Screen) -> Unit) {
     ) {
         Tabs.forEach { tab ->
             val (label, icon) = when (tab) {
-                Screen.Insights -> "Insights" to Icons.Outlined.Insights
+                is Screen.History -> "History" to Icons.Outlined.CalendarMonth
                 Screen.Settings -> "Settings" to Icons.Outlined.Settings
                 else -> "Today" to Icons.Outlined.Today
             }
             NavigationBarItem(
-                selected = current == tab,
+                selected = current::class == tab::class,
                 onClick = { onSelect(tab) },
                 icon = { Icon(icon, contentDescription = null) },
                 label = { Text(label, style = MaterialTheme.typography.labelMedium) },

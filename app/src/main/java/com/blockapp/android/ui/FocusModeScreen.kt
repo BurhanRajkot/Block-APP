@@ -28,6 +28,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -42,9 +43,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.blockapp.android.BlockApplication
 import com.blockapp.android.util.FocusModeSelection
-import com.blockapp.android.util.InstalledAppsProvider
 import com.blockapp.android.util.LaunchableApp
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.withContext
 
 /**
  * Locks a chosen set of apps for one duration. The starting set is whatever
@@ -55,15 +57,21 @@ import kotlinx.coroutines.flow.collectLatest
  * Locking still goes through [com.blockapp.android.data.BlockRepository.lockApp] once per target,
  * so every existing guarantee applies unchanged: a shorter Focus Mode run on an already-locked
  * app only ever extends it, and [com.blockapp.android.util.ProtectedPackages] stays enforced as
- * a backstop because extras are chosen from [InstalledAppsProvider.listLaunchableApps].
+ * a backstop because extras are chosen from
+ * [com.blockapp.android.util.InstalledAppsProvider.listLaunchableApps].
  */
 @Composable
 fun FocusModeScreen(onBack: () -> Unit, onLocked: (LockedSummary) -> Unit) {
     val context = LocalContext.current
     val app = context.applicationContext as BlockApplication
-    val allApps = remember { InstalledAppsProvider.listLaunchableApps(context) }
-
-    var targets by remember { mutableStateOf(FocusModeSelection.resolve(context)) }
+    // Both are PackageManager walks, so both load off the main thread; doing them inside
+    // remember {} froze the screen on open. The cached list makes a re-open instant.
+    val allApps = rememberLaunchableApps().orEmpty()
+    var targets by remember { mutableStateOf<List<LaunchableApp>>(emptyList()) }
+    var refreshes by remember { mutableIntStateOf(0) }
+    LaunchedEffect(refreshes) {
+        targets = withContext(Dispatchers.IO) { FocusModeSelection.resolve(context) }
+    }
     var picking by remember { mutableStateOf(false) }
 
     var activeLocks by remember { mutableStateOf<Map<String, Long>>(emptyMap()) }
@@ -82,7 +90,7 @@ fun FocusModeScreen(onBack: () -> Unit, onLocked: (LockedSummary) -> Unit) {
     val blockUntil = System.currentTimeMillis() + durationMs
 
     fun refresh() {
-        targets = FocusModeSelection.resolve(context)
+        refreshes++
     }
 
     if (picking) {
@@ -276,10 +284,7 @@ private fun AddFocusAppList(
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
             ) {
                 items(filtered, key = { it.packageName }) { launchable ->
-                    val context = LocalContext.current
-                    val identity = remember(launchable.packageName) {
-                        loadAppIdentity(context, launchable.packageName)
-                    }
+                    val identity = rememberAppIdentity(launchable.packageName)
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -316,10 +321,7 @@ private fun FocusAppRow(
     checked: Boolean,
     onToggle: () -> Unit,
 ) {
-    val context = LocalContext.current
-    val identity = remember(launchable.packageName) {
-        loadAppIdentity(context, launchable.packageName)
-    }
+    val identity = rememberAppIdentity(launchable.packageName)
     Row(
         modifier = Modifier
             .fillMaxWidth()

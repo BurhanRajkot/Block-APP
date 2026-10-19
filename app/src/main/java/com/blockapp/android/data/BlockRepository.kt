@@ -2,7 +2,9 @@ package com.blockapp.android.data
 
 import android.content.Context
 import android.database.sqlite.SQLiteException
+import androidx.room.withTransaction
 import com.blockapp.android.alarm.AlarmScheduler
+import com.blockapp.android.usage.DayUsage
 import com.blockapp.android.util.ProtectedPackages
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
@@ -20,9 +22,11 @@ import java.time.LocalDate
  */
 class BlockRepository(
     private val context: Context,
-    private val dao: BlockDao,
+    private val database: AppDatabase,
     private val scope: CoroutineScope,
 ) {
+    private val dao: BlockDao = database.blockDao()
+
     private val _activeLocks = MutableStateFlow<Map<String, Long>>(emptyMap())
 
     /**
@@ -162,5 +166,85 @@ class BlockRepository(
             }
         }
         return true
+    }
+
+    // ── history ─────────────────────────────────────────────────────────────────────────────
+
+    /** Per-day reel totals in [from]..[to] inclusive. Days with no reels have no row. */
+    fun observeReelDays(from: LocalDate, to: LocalDate): Flow<List<ReelDayTotal>> =
+        dao.observeReelDays(from.toString(), to.toString())
+
+    /** Per-app reel totals over [from]..[to], most first. */
+    fun observeReelApps(from: LocalDate, to: LocalDate): Flow<List<ReelAppTotal>> =
+        dao.observeReelApps(from.toString(), to.toString())
+
+    fun observeUsageDays(from: LocalDate, to: LocalDate): Flow<List<UsageDayEntity>> =
+        dao.observeUsageDays(from.toString(), to.toString())
+
+    fun observeUsageApps(day: LocalDate): Flow<List<UsageAppEntity>> = dao.observeUsageApps(day.toString())
+
+    fun observeUsageAppTotals(from: LocalDate, to: LocalDate): Flow<List<UsageAppTotal>> =
+        dao.observeUsageAppTotals(from.toString(), to.toString())
+
+    /** The first day with any recorded screen time or reels, or null on a fresh install. */
+    suspend fun earliestRecordedDay(): LocalDate? =
+        dao.earliestRecordedDay()?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
+
+    /**
+     * Reel totals for the [days] complete days before today, oldest first, zero-filled. What
+     * ReelPlan.refresh adapts to. Days before the first recorded one are left out rather than
+     * counted as zero, or a fresh install would read as three perfect days and drop the limit
+     * to its floor on day one.
+     */
+    suspend fun recentDailyReels(days: Int): List<Int> {
+        val today = LocalDate.now()
+        val from = today.minusDays(days.toLong())
+        val earliest = earliestRecordedDay() ?: return emptyList()
+        val byDay = dao.reelDaysOnce(from.toString(), today.minusDays(1).toString()).associateBy { it.day }
+        return (0 until days)
+            .map { from.plusDays(it.toLong()) }
+            .filter { !it.isBefore(earliest) }
+            .map { byDay[it.toString()]?.reels ?: 0 }
+    }
+
+    /**
+     * Copies [days] of screen time into the archive. Two rules keep a replay from making the
+     * archive worse:
+     * - an empty day is never written, because a day older than the system's event window
+     *   replays as empty, and writing that would erase a day the archive still had;
+     * - a day is only replaced by one at least as large. The oldest day of a replay can come out
+     *   short (its lookback misses a session that started earlier), and the fuller copy wins.
+     *
+     * A failed write is dropped, like [addReelsWatched]: this runs from a receiver and from
+     * screens, and a statistic must not take the process down (CLAUDE.md invariant 9).
+     */
+    suspend fun archiveUsage(days: List<DayUsage>) {
+        try {
+            for (usage in days) {
+                if (usage.totalMillis <= 0L && usage.unlocks == 0) continue
+                val key = usage.day.toString()
+                val existing = dao.usageDay(key)
+                if (existing != null && existing.totalMs > usage.totalMillis) continue
+                database.withTransaction {
+                    dao.upsertUsageDay(
+                        UsageDayEntity(
+                            day = key,
+                            totalMs = usage.totalMillis,
+                            opens = usage.totalOpens,
+                            unlocks = usage.unlocks,
+                            hourly = usage.hourly.joinToString(","),
+                        ),
+                    )
+                    dao.clearUsageApps(key)
+                    dao.insertUsageApps(
+                        usage.apps.map {
+                            UsageAppEntity(key, it.packageName, it.label, it.foregroundMillis, it.opens)
+                        },
+                    )
+                }
+            }
+        } catch (e: SQLiteException) {
+            // Dropped on purpose; see KDoc.
+        }
     }
 }

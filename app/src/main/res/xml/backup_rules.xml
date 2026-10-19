@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Auto Backup on Android 11 and below (android:fullBackupContent). Keep in step with
+     data_extraction_rules.xml, which is what Android 12+ reads instead.
+
+     What comes back on a reinstall: the Room database (reel counts, the screen-time archive
+     History reads, running locks, used unlock-key nonces) and the preferences (reel limit, reel
+     plan, Focus mode picks). Locks coming back is deliberate: an uninstall/reinstall should not
+     be a way out of one, and used nonces coming back keeps a spent unlock key spent. -->
+<full-backup-content>
+    <include domain="database" path="." />
+    <include domain="sharedpref" path="." />
+</full-backup-content>

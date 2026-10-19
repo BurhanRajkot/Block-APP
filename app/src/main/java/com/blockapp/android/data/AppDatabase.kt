@@ -8,8 +8,14 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
-    entities = [BlockedAppEntity::class, UsedNonceEntity::class, ReelCountEntity::class],
-    version = 3,
+    entities = [
+        BlockedAppEntity::class,
+        UsedNonceEntity::class,
+        ReelCountEntity::class,
+        UsageDayEntity::class,
+        UsageAppEntity::class,
+    ],
+    version = 4,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -25,7 +31,7 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "blockapp.db",
-                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build().also { instance = it }
+                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build().also { instance = it }
             }
 
         /**
@@ -55,6 +61,28 @@ abstract class AppDatabase : RoomDatabase() {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(
                     "ALTER TABLE `reel_counts` ADD COLUMN `watchMs` INTEGER NOT NULL DEFAULT 0",
+                )
+            }
+        }
+
+        /**
+         * v4 adds the usage archive (usage_days, usage_apps) that History reads for anything older
+         * than the system's own week of usage events. Pure additions, so no existing row is
+         * touched. Copied from createAllTables in the generated AppDatabase_Impl, for the same
+         * reason as MIGRATION_1_2.
+         */
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `usage_days` (`day` TEXT NOT NULL, " +
+                        "`totalMs` INTEGER NOT NULL, `opens` INTEGER NOT NULL, " +
+                        "`unlocks` INTEGER NOT NULL, `hourly` TEXT NOT NULL, PRIMARY KEY(`day`))",
+                )
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `usage_apps` (`day` TEXT NOT NULL, " +
+                        "`packageName` TEXT NOT NULL, `label` TEXT NOT NULL, " +
+                        "`foregroundMs` INTEGER NOT NULL, `opens` INTEGER NOT NULL, " +
+                        "PRIMARY KEY(`day`, `packageName`))",
                 )
             }
         }

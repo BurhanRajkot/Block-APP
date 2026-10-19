@@ -36,7 +36,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.blockapp.android.BlockApplication
-import com.blockapp.android.util.InstalledAppsProvider
 import com.blockapp.android.util.LaunchableApp
 import kotlinx.coroutines.flow.collectLatest
 
@@ -47,7 +46,7 @@ import kotlinx.coroutines.flow.collectLatest
  *
  * [initialPackage] opens straight on the duration step for that app (the lock buttons on usage
  * rows). Back from there leaves the screen, since the user never saw the list. A package that
- * isn't launchable, or is protected, isn't in [InstalledAppsProvider.listLaunchableApps] and
+ * isn't launchable, or is protected, isn't in [com.blockapp.android.util.InstalledAppsProvider.listLaunchableApps] and
  * falls back to the list, so this entry point can't get around ProtectedPackages either.
  *
  * The duration step is where the commitment is actually made, so it is deliberately the slower
@@ -63,12 +62,16 @@ fun AppPickerScreen(
     val context = LocalContext.current
     val app = context.applicationContext as BlockApplication
 
-    val apps = remember { InstalledAppsProvider.listLaunchableApps(context) }
+    // Null until the first load in this process finishes; see rememberLaunchableApps.
+    val apps = rememberLaunchableApps()
     var query by remember { mutableStateOf("") }
-    var selected by remember {
-        mutableStateOf(initialPackage?.let { pkg -> apps.firstOrNull { it.packageName == pkg } })
+    var selected by remember { mutableStateOf<LaunchableApp?>(null) }
+    // Resolved against the list once it arrives, so opening on an app (the lock buttons on usage
+    // rows) still goes through the launchable-and-not-protected filter rather than around it.
+    val initialTarget = remember(apps) {
+        initialPackage?.let { pkg -> apps?.firstOrNull { it.packageName == pkg } }
     }
-    val openedOnApp = remember { selected != null }
+    val openedOnApp = initialTarget != null
 
     // Drives the "Locked" chip in the list and the extend-vs-lock wording on the duration step.
     // Observed rather than sampled once: a lock can expire while this screen is open, and a stale
@@ -82,7 +85,11 @@ fun AppPickerScreen(
     var confirmed by remember { mutableStateOf(false) }
     var frozenUntil by remember { mutableStateOf<Long?>(null) }
 
-    val target = selected
+    // Opening on one app, before the list has loaded: draw nothing for the moment rather than
+    // flash the list and then jump to the duration step.
+    if (initialPackage != null && apps == null) return
+
+    val target = selected ?: initialTarget
     if (target == null) {
         AppList(
             apps        = apps,
@@ -98,7 +105,7 @@ fun AppPickerScreen(
             // Frozen at confirm: the screen stays composed while it slides away, and without
             // this the lock it just created flips its title to "Extend the lock" mid-exit.
             existingUntil = if (confirmed) frozenUntil else activeLocks[target.packageName],
-            onBack        = { if (openedOnApp) onBack() else selected = null },
+            onBack        = { if (openedOnApp && selected == null) onBack() else selected = null },
             onConfirm     = { blockUntil ->
                 frozenUntil = activeLocks[target.packageName]
                 confirmed = true
@@ -112,7 +119,7 @@ fun AppPickerScreen(
 // ── step 1: pick an app ────────────────────────────────────────────────────────
 @Composable
 private fun AppList(
-    apps: List<LaunchableApp>,
+    apps: List<LaunchableApp>?,
     query: String,
     onQuery: (String) -> Unit,
     activeLocks: Map<String, Long>,
@@ -120,10 +127,10 @@ private fun AppList(
     onSelect: (LaunchableApp) -> Unit,
 ) {
     val filtered = remember(apps, query) {
-        if (query.isBlank()) {
-            apps
-        } else {
-            apps.filter { it.label.contains(query.trim(), ignoreCase = true) }
+        when {
+            apps == null -> null
+            query.isBlank() -> apps
+            else -> apps.filter { it.label.contains(query.trim(), ignoreCase = true) }
         }
     }
 
@@ -141,7 +148,9 @@ private fun AppList(
         )
         Spacer(Modifier.height(8.dp))
 
-        if (filtered.isEmpty()) {
+        if (filtered == null) {
+            LoadingRows()
+        } else if (filtered.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
                     "No app matches \"$query\".",
@@ -167,10 +176,7 @@ private fun AppList(
 
 @Composable
 private fun AppRow(launchable: LaunchableApp, isLocked: Boolean, onClick: () -> Unit) {
-    val context = LocalContext.current
-    val identity = remember(launchable.packageName) {
-        loadAppIdentity(context, launchable.packageName)
-    }
+    val identity = rememberAppIdentity(launchable.packageName)
 
     Row(
         modifier          = Modifier
@@ -204,8 +210,7 @@ private fun DurationStep(
     onBack: () -> Unit,
     onConfirm: (blockUntil: Long) -> Unit,
 ) {
-    val context = LocalContext.current
-    val identity = remember(target.packageName) { loadAppIdentity(context, target.packageName) }
+    val identity = rememberAppIdentity(target.packageName)
 
     var presetMs by remember { mutableStateOf<Long?>(null) }
     var isCustom by remember { mutableStateOf(false) }

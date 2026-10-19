@@ -1,20 +1,24 @@
 package com.blockapp.android.accessibility
 
 import android.accessibilityservice.AccessibilityService
+import android.graphics.Point
+import android.hardware.display.DisplayManager
 import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.SystemClock
 import android.util.Log
+import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import com.blockapp.android.util.ReelApps
 import androidx.annotation.RequiresApi
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /**
  * Decides when the user is watching short-form video (Reels, Shorts, TikTok, Spotlight, …) in
- * any app, counts the videos, and times the stretch spent watching. The floating ReelBubble is
+ * one of the short-video apps in ReelApps.KNOWN (no other app is watched), counts the videos, and times the stretch spent watching. The floating ReelBubble is
  * shown for exactly as long as a *session* is open here.
  *
  * Two independent sources feed it, because neither works in every app:
@@ -48,7 +52,8 @@ import kotlin.math.roundToInt
 internal class ReelTracker(
     private val service: AccessibilityService,
     private val handler: Handler,
-    private val ignoredPackages: Set<String>,
+    /** The only packages watched; see ReelApps.KNOWN for why there is an allowlist at all. */
+    private val trackedPackages: Set<String>,
     private val listener: Listener,
 ) {
     interface Listener {
@@ -57,22 +62,64 @@ internal class ReelTracker(
         fun onSessionEnded(packageName: String)
     }
 
-    /** A page as the scanner saw it. See [ReelScreenScanner.Match.pageSignature]. */
-    private class PageKey(val node: AccessibilityNodeInfo, val signature: String) {
-        fun sameReelAs(other: PageKey) =
-            node == other.node || (signature.isNotEmpty() && signature == other.signature)
+    /** A page as the scanner saw it. See [ReelScreenScanner.Match.pageTokens]. */
+    private class PageKey(
+        val node: AccessibilityNodeInfo?,
+        val tokens: Set<String>,
+        /** ReelScreenScanner.Match.railLabels: the rail's counts, for a rail match only. */
+        val railLabels: Set<String>? = null,
+    ) {
+        /**
+         * Whether this is the page [other] was. With page nodes on both sides, a different node
+         * is a different page. Without (an action-rail match), mostly the same words is the same
+         * reel: the caption and username stay, while a toggled "Follow"/"Following" or like
+         * button changes a word or two.
+         *
+         * A rail page also has to show different rail counts to be a different reel. Caption
+         * text alone changed under auto-captions, which redraw a line every second or two in
+         * the same zone, and on tapping "…more", and each change counted another reel.
+         */
+        fun samePageAs(other: PageKey): Boolean = when {
+            node != null && other.node != null -> node == other.node
+            // No caption text on either side is no evidence of a change. Treating it as one
+            // would count a new reel on every scan of a captionless rail screen.
+            tokens.isEmpty() && other.tokens.isEmpty() -> true
+            railLabels != null && railLabels.isNotEmpty() && railLabels == other.railLabels -> true
+            else -> similarText(other)
+        }
+
+        /**
+         * For spotting a reel seen moments ago (swiping back, returning to the app). Also
+         * matches on text when the nodes differ, since Compose rebuilds a page's node when it
+         * scrolls back into view.
+         */
+        fun sameReelAs(other: PageKey): Boolean =
+            (node != null && node == other.node) || similarText(other)
+
+        /**
+         * Shared words over the *smaller* set, not over the union (Jaccard). The same reel with a
+         * subtitle line or an expanded caption on top is a superset of itself, and the union
+         * measure read those extra words as a different reel.
+         */
+        private fun similarText(other: PageKey): Boolean {
+            if (tokens.isEmpty() || other.tokens.isEmpty()) return false
+            val shared = tokens.count { it in other.tokens }
+            return shared.toFloat() / minOf(tokens.size, other.tokens.size) >= SAME_TEXT_SIMILARITY
+        }
     }
 
-    private class Session(val packageName: String, now: Long) {
+    private class Session(val packageName: String, val kind: String, now: Long) {
         val id = nextSessionId++
         var lastMark = now
         /** True once a snapped swipe was seen. From then on only swipes count. */
         var scrollDriven = false
-        var lastPage: AccessibilityNodeInfo? = null
+        var lastKey: PageKey? = null
         /** The current page and the ones just before it, oldest first, to spot swiping back. */
         val recentPages = ArrayDeque<PageKey>()
         var missedScans = 0
         var firstMissAt = 0L
+        /** Off-boundary swipes in a row; see scoreBurst. */
+        var offBeatBursts = 0
     }
 
     private class Container {
@@ -112,7 +159,7 @@ internal class ReelTracker(
 
     private val detector = ReelScrollDetector(
         handler = handler,
-        ignoredPackages = ignoredPackages,
+        trackedPackages = trackedPackages,
         onBurst = ::onBurst,
     )
 
@@ -120,23 +167,63 @@ internal class ReelTracker(
     private val scanHandler = Handler(scanThread.looper)
     private var scanPending = false
     private var lastScanAt = 0L
+    /** Whether the last scan found a viewer. Misses with no session open back off; see requestScan. */
+    private var lastScanFound = false
+    private var lastNote: String? = null
+    private var lastNoteAt = 0L
     private var released = false
     private val runScan = Runnable { startScan() }
+    /** The app the last event came from, which picks the idle scan cadence in requestScan. */
+    private var lastEventPackage: String? = null
+    private var scanInFlight = false
 
     // ── inputs ────────────────────────────────────────────────────────────────────────────────
 
     fun onScrolled(event: AccessibilityEvent) {
-        val metrics = service.resources.displayMetrics
-        detector.onScrolled(event, metrics.widthPixels, metrics.heightPixels)
+        val screen = realScreenSize()
+        detector.onScrolled(event, screen.x, screen.y)
+    }
+
+    /**
+     * The whole display, system bars included, because node bounds are in that space.
+     * resources.displayMetrics leaves the bars out (2209px of a 2400px emulator screen), and
+     * against that smaller height a reel's caption, near the bottom, landed outside the caption
+     * zone, so every reel's text came out empty and they all looked like the same reel.
+     */
+    private fun realScreenSize(): Point {
+        val size = Point()
+        val display = service.getSystemService(DisplayManager::class.java)?.getDisplay(Display.DEFAULT_DISPLAY)
+        if (display != null) {
+            @Suppress("DEPRECATION") // getRealSize's replacement needs a visual context, which this service isn't.
+            display.getRealSize(size)
+        }
+        if (size.x <= 0 || size.y <= 0) {
+            val metrics = service.resources.displayMetrics
+            size.set(metrics.widthPixels, metrics.heightPixels)
+        }
+        return size
     }
 
     /**
      * Any content change in the foreground app. These arrive many times a second while a video
      * plays, so this only arms a throttled scan and returns.
      */
-    fun onContentChanged(packageName: String) {
-        if (packageName !in ignoredPackages) requestScan()
+    fun onContentChanged(packageName: String, transientPackages: Set<String>) {
+        if (packageName in trackedPackages) {
+            lastEventPackage = packageName
+            requestScan()
+        } else if (session != null && packageName != service.packageName && packageName !in transientPackages) {
+            // Another app drawing while a session is open means the window-state event for the
+            // switch may have been dropped. Without this the pill stayed up over the launcher,
+            // since untracked apps never trigger a scan. The scan checks which app is really in
+            // front (a PiP window drawing doesn't end anything) before ending the session.
+            this.transientPackages = transientPackages
+            requestScan()
+        }
     }
+
+    /** From the last onContentChanged; finishScan needs it to judge the front app. */
+    private var transientPackages: Set<String> = emptySet()
 
     /**
      * A window came to the front. A different app ends the session, unless it is one of
@@ -144,6 +231,7 @@ internal class ReelTracker(
      * without the user leaving it.
      */
     fun onWindowStateChanged(packageName: String, className: String, transientPackages: Set<String>) {
+        this.transientPackages = transientPackages
         val current = session
         if (current != null && packageName != current.packageName && packageName !in transientPackages) {
             // This app's own non-activity windows (the bubble itself, the Tier 1 toast) report
@@ -153,7 +241,18 @@ internal class ReelTracker(
                 !className.startsWith("${service.packageName}.")
             if (!ownOverlay) endSession("switched to $packageName")
         }
-        if (packageName !in ignoredPackages) requestScan()
+        if (packageName in trackedPackages) {
+            // A switch into a reel app scans now rather than waiting out the previous interval.
+            // Only a queued scan is pulled forward. One already walking the tree is left to
+            // finish, since two in flight would both report into onScanResult.
+            if (packageName != lastEventPackage && !scanInFlight) {
+                handler.removeCallbacks(runScan)
+                scanPending = false
+                lastScanAt = 0L
+            }
+            lastEventPackage = packageName
+            requestScan()
+        }
     }
 
     /** The bubble must not sit over the lock screen, and nothing is watched with the screen off. */
@@ -176,29 +275,43 @@ internal class ReelTracker(
         if (scanPending || released) return
         scanPending = true
         val now = SystemClock.uptimeMillis()
-        val delay = maxOf(SCAN_DELAY_MS, lastScanAt + SCAN_INTERVAL_MS - now)
+        // An app that isn't showing reels right now is scanned less often. The fallback walk
+        // visits the whole window, and content changes keep coming while the user is in a feed.
+        // Untracked apps are never scanned at all (see trackedPackages).
+        val interval = if (session != null || lastScanFound) SCAN_INTERVAL_MS else IDLE_SCAN_INTERVAL_MS
+        val delay = maxOf(SCAN_DELAY_MS, lastScanAt + interval - now)
         handler.postDelayed(runScan, delay)
     }
 
     private fun startScan() {
-        val metrics = service.resources.displayMetrics
-        val width = metrics.widthPixels
-        val height = metrics.heightPixels
+        val screen = realScreenSize()
+        val width = screen.x
+        val height = screen.y
         // Reels are watched upright. In landscape, full-screen video players would fit the
         // pager shape, and the bubble's camera anchor is wrong anyway.
         if (width > height) {
-            finishScan(rootPackage = null, match = null, failed = true)
+            // A session open when the phone turns is a miss, not a failed scan, or the pill
+            // would sit at a camera anchor that no longer exists for as long as it stays sideways.
+            val current = session
+            if (current != null) finishScan(current.packageName, result = null, failed = false)
+            else finishScan(rootPackage = null, result = null, failed = true)
             return
         }
+        scanInFlight = true
         scanHandler.post {
             var rootPackage: String? = null
-            var match: ReelScreenScanner.Match? = null
+            var result: ReelScreenScanner.Result? = null
             var failed = false
             try {
                 val root = service.rootInActiveWindow
                 rootPackage = root?.packageName?.toString()
-                if (root != null && rootPackage !in ignoredPackages) {
-                    match = ReelScreenScanner.scan(root, width, height)
+                if (root != null && rootPackage in trackedPackages) {
+                    result = ReelScreenScanner.scan(
+                        root,
+                        width,
+                        height,
+                        requireVideo = rootPackage in ReelApps.NEEDS_VIDEO_EVIDENCE,
+                    )
                 }
             } catch (e: RuntimeException) {
                 // The window can vanish mid-walk (IllegalStateException), or the binder call
@@ -206,16 +319,34 @@ internal class ReelTracker(
                 // miss either.
                 failed = true
             }
-            handler.post { finishScan(rootPackage, match, failed) }
+            handler.post { finishScan(rootPackage, result, failed) }
         }
     }
 
-    private fun finishScan(rootPackage: String?, match: ReelScreenScanner.Match?, failed: Boolean) {
+    private fun finishScan(rootPackage: String?, result: ReelScreenScanner.Result?, failed: Boolean) {
         scanPending = false
-        lastScanAt = SystemClock.uptimeMillis()
-        if (released || failed || rootPackage == null || rootPackage in ignoredPackages) return
+        scanInFlight = false
+        val now = SystemClock.uptimeMillis()
+        lastScanAt = now
+        if (released || failed || rootPackage == null) return
+        if (rootPackage !in trackedPackages) {
+            val current = session
+            if (current != null && rootPackage != service.packageName && rootPackage !in transientPackages) {
+                endSession("$rootPackage in front")
+            }
+            return
+        }
+        lastScanFound = result?.match != null
+        // Near misses are what explain an app that never counts, so they are logged, but only
+        // when they change or every NOTE_REPEAT_MS, since scans run about once a second.
+        val note = result?.note?.let { "$rootPackage: no reel viewer ($it)" }
+        if (note != null && (note != lastNote || now - lastNoteAt > NOTE_REPEAT_MS)) {
+            Log.d(TAG, note)
+            lastNote = note
+            lastNoteAt = now
+        }
         try {
-            onScanResult(rootPackage, match)
+            onScanResult(rootPackage, result?.match)
         } catch (e: RuntimeException) {
             Log.w(TAG, "scan result dropped", e)
         }
@@ -246,18 +377,18 @@ internal class ReelTracker(
             return
         }
 
+        val key = PageKey(match.page, match.pageTokens, match.railLabels)
         if (current != null) {
             current.missedScans = 0
-            if (match.page != current.lastPage) {
-                val previous = current.lastPage
-                current.lastPage = match.page
-                val key = PageKey(match.page, match.pageSignature)
+            val previous = current.lastKey
+            if (previous == null || !previous.samePageAs(key)) {
+                current.lastKey = key
                 val revisit = current.recentPages.any { it.sameReelAs(key) }
                 current.recentPages.removeAll { it.sameReelAs(key) }
                 current.recentPages.addLast(key)
                 while (current.recentPages.size > RECENT_PAGES) current.recentPages.removeFirst()
                 if (previous != null && !current.scrollDriven && !revisit) {
-                    deferPageChangeCount(current)
+                    deferPageChangeCount(current, key)
                 }
             }
             return
@@ -267,12 +398,11 @@ internal class ReelTracker(
             candidate = Candidate(rootPackage, match.pager, now)
             return
         }
-        val key = PageKey(match.page, match.pageSignature)
         val ended = endedPages[rootPackage]
         val sameReelAsBefore = ended != null && ended.first.sameReelAs(key) && now - ended.second < REVISIT_MS
-        startSession(rootPackage, "scanner match")
+        startSession(rootPackage, match.kind, "${match.kind} match")
         session?.let {
-            it.lastPage = match.page
+            it.lastKey = key
             it.recentPages.addLast(key)
         }
         if (!sameReelAsBefore) count(1)
@@ -286,12 +416,17 @@ internal class ReelTracker(
      * pixels (a 2209px page swipe arrived as -7px on an emulator), so their bursts never snap
      * and this is the only counter that works for them.
      */
-    private fun deferPageChangeCount(current: Session) {
+    private fun deferPageChangeCount(current: Session, key: PageKey) {
         val sessionId = current.id
         handler.postDelayed(
             {
                 val live = session
-                if (!released && live != null && live.id == sessionId && !live.scrollDriven) {
+                // Only if the page that changed is still the one on screen. A page that changed
+                // again within the grace was something passing over the reel (a pause overlay,
+                // a toast, a sheet sliding in), not a reel the user stopped on.
+                if (!released && live != null && live.id == sessionId && !live.scrollDriven &&
+                    live.lastKey === key
+                ) {
                     Log.d(TAG, "${live.packageName}: page changed, no swipe measured, +1")
                     count(1)
                 }
@@ -333,6 +468,18 @@ internal class ReelTracker(
         )
 
         if (offBoundary || severalVisible || abs(pages) > MAX_PAGES_PER_BURST) {
+            // A rail-matched viewer is identified by its buttons, not by this scroller, and some
+            // apps (YouTube) move other full-screen views around underneath it. The scanner
+            // ends a rail session when the rail goes away.
+            if (active != null && active.kind == KIND_RAIL) return
+            // One off swipe inside a session is usually a dropped frame or a half-settled page,
+            // not a feed. Ending on it hid the pill mid-reel, and the 30s feed cooldown then kept
+            // the viewer from being recognised again, so the pill vanished and counting stopped.
+            // Two in a row, or the scanner no longer seeing a viewer, still ends it.
+            if (active != null && ++active.offBeatBursts < OFF_BEAT_TO_END) {
+                requestScan()
+                return
+            }
             container.reset()
             container.feedUntil = now + FEED_COOLDOWN_MS
             if (candidate?.pager == burst.node) candidate = null
@@ -343,6 +490,7 @@ internal class ReelTracker(
         if (pages == 0) return
 
         container.feedUntil = 0L
+        active?.offBeatBursts = 0
         if (container.pageHeight == 0) container.pageHeight = abs(burst.netDeltaY) / abs(pages)
         container.position += pages
         container.furthest = maxOf(container.furthest, container.position)
@@ -364,13 +512,26 @@ internal class ReelTracker(
         val recentCandidate = candidate?.let {
             it.packageName == pkg && now - it.at < CANDIDATE_TTL_MS
         } == true
-        // One snapped swipe is enough when something else already says "pager". Otherwise a
-        // feed fling landing on a page boundary by chance (~4%) would start a session, so two
-        // in a row are required (well under 1%).
-        val strong = burst.hasPageActions || recentCandidate ||
-            (burst.fromIndex >= 0 && burst.fromIndex == burst.toIndex)
-        if (container.snappedStreak >= if (strong) 1 else CONFIRM_STREAK) {
-            startSession(pkg, if (strong) "one snapped swipe" else "two snapped swipes")
+        // A swipe that lands on a page boundary only says "this scroller snaps", and plenty of
+        // things that aren't short video snap: photo viewers, galleries, onboarding pages.
+        // So a swipe opens a session only on top of other evidence. The scanner having seen a
+        // reel-shaped screen (a candidate) is enough on its own. Declared pager semantics or a
+        // single item at rest need a second snapped swipe. The bare "two snapped swipes" rule,
+        // which opened a session with nothing else to go on, is gone. In apps that show photos
+        // in the same viewers, only a scan that saw a video player (a candidate) counts.
+        val singleItem = burst.fromIndex >= 0 && burst.fromIndex == burst.toIndex
+        val needed = when {
+            recentCandidate -> 1
+            pkg in ReelApps.NEEDS_VIDEO_EVIDENCE -> return
+            burst.hasPageActions || singleItem -> CONFIRM_STREAK
+            else -> return
+        }
+        if (container.snappedStreak >= needed) {
+            startSession(
+                pkg,
+                KIND_SWIPE,
+                if (needed == 1) "snapped swipe on a reel screen" else "two snapped swipes on a pager",
+            )
             val opened = session ?: return
             opened.scrollDriven = true
             container.sessionId = opened.id
@@ -390,9 +551,9 @@ internal class ReelTracker(
 
     // ── sessions ──────────────────────────────────────────────────────────────────────────────
 
-    private fun startSession(packageName: String, reason: String) {
+    private fun startSession(packageName: String, kind: String, reason: String) {
         if (session != null) endSession("replaced by $packageName")
-        session = Session(packageName, SystemClock.uptimeMillis())
+        session = Session(packageName, kind, SystemClock.uptimeMillis())
         candidate = null
         Log.d(TAG, "$packageName: session started ($reason)")
         listener.onSessionStarted(packageName)
@@ -436,6 +597,27 @@ internal class ReelTracker(
         private const val SCAN_INTERVAL_MS = 800L
 
         /**
+         * Scan spacing while nothing reel-like is on screen. Opening a reel viewer still gets a
+         * scan within this, and a window change gets one sooner. Halves the cost of the
+         * whole-window rail walk in ordinary apps.
+         */
+        private const val IDLE_SCAN_INTERVAL_MS = 1_600L
+
+        /** How often an unchanged near-miss note is repeated in the log. */
+        private const val NOTE_REPEAT_MS = 30_000L
+
+        /**
+         * Share of the smaller page's words the other must also show to be the same reel. A
+         * caption plus username keeps the same reel near 1.0 through a toggled button or an
+         * added subtitle line, while two different reels share little once the chrome words
+         * (ReelScreenScanner.CHROME_WORDS) are left out.
+         */
+        private const val SAME_TEXT_SIMILARITY = 0.6f
+
+        private const val KIND_RAIL = "rail"
+        private const val KIND_SWIPE = "swipe"
+
+        /**
          * A session ends after this many scans in a row find no viewer, the first and last at
          * least END_AFTER_MS apart. Two misses one SCAN_INTERVAL_MS apart is about the
          * quickest that can't be fooled by a single swipe caught mid-settle.
@@ -476,6 +658,9 @@ internal class ReelTracker(
         private const val MAX_PAGES_PER_BURST = 3
 
         private const val CONFIRM_STREAK = 2
+
+        /** Off-boundary swipes in a row that end a pager session; see scoreBurst. */
+        private const val OFF_BEAT_TO_END = 2
 
         /** Longest a single reel can add to watch time. YouTube Shorts run up to 3 minutes. */
         private const val MAX_REEL_MS = 3 * 60_000L

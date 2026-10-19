@@ -13,13 +13,23 @@ android {
         applicationId = "com.blockapp.android"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 3
+        versionName = "1.2"
     }
 
     buildTypes {
+        // The build to put on the phone (`./gradlew installRelease`). A debug build is what made
+        // the app feel slow on a Pixel: debuggable apps run Compose without ahead-of-time
+        // compilation or R8, and the frame times showed it. R8 and resource shrinking also
+        // strip material-icons-extended down to the few icons actually drawn.
+        //
+        // Signed with the local debug key so it installs without a keystore. That is fine for a
+        // personal sideloaded tool, but it means release and debug share a signature, so they can
+        // be installed over each other without losing data.
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            signingConfig = signingConfigs.getByName("debug")
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
@@ -54,6 +64,10 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.6")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.6")
     implementation("androidx.activity:activity-compose:1.9.2")
+    // Installs src/main/baseline-prof.txt (and the Compose libraries' own profiles) on a sideload.
+    // Without it those profiles are only applied by the Play Store, so a sideloaded release
+    // build would still JIT its first few launches, which is exactly when it felt slowest.
+    implementation("androidx.profileinstaller:profileinstaller:1.3.1")
 
     implementation("androidx.room:room-runtime:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")

@@ -1,20 +1,17 @@
 package com.blockapp.android.ui
 
 import android.os.Build
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
+import android.util.Log
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -24,23 +21,29 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.outlined.Bedtime
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleResumeEffect
@@ -50,11 +53,16 @@ import com.blockapp.android.BlockApplication
 import com.blockapp.android.admin.DeviceAdminHelper
 import com.blockapp.android.data.BlockedAppEntity
 import com.blockapp.android.data.ReelCountEntity
+import com.blockapp.android.data.ReelDayTotal
 import com.blockapp.android.ui.theme.Ember
 import com.blockapp.android.ui.theme.EmberWash
+import com.blockapp.android.ui.theme.Lime
 import com.blockapp.android.ui.theme.StatusColors
 import com.blockapp.android.usage.DayUsage
 import com.blockapp.android.usage.UsageStatsProvider
+import com.blockapp.android.util.ReelLimit
+import com.blockapp.android.util.ReelPlan
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
@@ -63,22 +71,28 @@ import kotlinx.coroutines.withContext
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
+import java.time.format.TextStyle
 import java.util.Locale
 
 /**
- * The Today tab: protection state, today's screen time and reels, the two ways to lock, running
- * locks, and the apps the day went to. Every figure here is also on InsightsScreen in more
- * depth. This screen is the glance, and tapping a figure goes there.
+ * The Today tab: protection state, today's reels against the plan, the last seven days, today's
+ * screen time, the two ways to lock, running locks, and the apps the day went to. Every figure
+ * here opens the matching day in HistoryScreen.
  *
  * Invariant 1 note: RemoveProtectionScreen is reached from here through the Settings tab in
  * MainActivity's bottom bar, which is always visible on this screen.
+ *
+ * Nothing at the top level of this composable may change every second. The countdowns tick
+ * inside each [LockCard]; a ticker read up here used to recompose the whole screen once a
+ * second, which was a large part of why scrolling it felt heavy.
  */
 @Composable
 fun HomeScreen(
     onFocusMode: () -> Unit,
     onAddLock: () -> Unit,
     onLockApp: (packageName: String) -> Unit,
-    onInsights: () -> Unit,
+    onHistory: (day: LocalDate?) -> Unit,
+    onPlan: () -> Unit,
     onFixSetup: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -87,29 +101,32 @@ fun HomeScreen(
     var isAdminActive by remember { mutableStateOf(true) }
     var isAccessibilityActive by remember { mutableStateOf(true) }
     var hasUsageAccess by remember { mutableStateOf(true) }
-    var now by remember { mutableStateOf(System.currentTimeMillis()) }
     var reelCounts by remember { mutableStateOf<List<ReelCountEntity>>(emptyList()) }
+    var week by remember { mutableStateOf<List<ReelDayTotal>>(emptyList()) }
     var usage by remember { mutableStateOf<DayUsage?>(null) }
+    var reelLimit by remember { mutableStateOf(ReelLimit.todayLimit(context)) }
+    var plan by remember { mutableStateOf(ReelPlan.current(context)) }
+    var quiet by remember { mutableStateOf(ReelPlan.quietHours(context)) }
+    var editingLimit by remember { mutableStateOf(false) }
+
+    // Advanced once a minute. LocalDate compares by value, so setting the same day again
+    // recomposes nothing; only an actual midnight re-keys the collectors below.
+    var today by remember { mutableStateOf(LocalDate.now()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(DAY_CHECK_MS)
+            today = LocalDate.now()
+        }
+    }
 
     LaunchedEffect(Unit) {
         app.repository.activeEntities.collectLatest { locks = it }
     }
-
-    // Keyed on the date, derived from the 1s ticker below. Without that, a screen left open past
-    // midnight would keep showing yesterday's total. LocalDate compares by value, so the
-    // collector only restarts when the day actually changes, not every tick.
-    val today = remember(now) { LocalDate.now() }
     LaunchedEffect(today) {
         app.repository.observeReelCounts(today).collectLatest { reelCounts = it }
     }
-
-    // Ticks once a second so the remaining-time figure stays live instead of showing a stale
-    // duration computed only when the lock list last changed.
-    LaunchedEffect(Unit) {
-        while (true) {
-            delay(1000L)
-            now = System.currentTimeMillis()
-        }
+    LaunchedEffect(today) {
+        app.repository.observeReelDays(today.minusDays(6), today).collectLatest { week = it }
     }
 
     // Re-check protection status every time this screen resumes (e.g. after returning from
@@ -123,13 +140,32 @@ fun HomeScreen(
         // One-shot sweep, not a poll: catches a lock whose expiry alarm was missed (see
         // BlockApplication's cold-start sweep for why that can happen) every time the user
         // looks at this screen, at zero background cost since it only runs on resume.
-        app.applicationScope.launch { app.repository.expireAllDue() }
-        onPauseOrDispose {}
+        val job = app.applicationScope.launch {
+            // applicationScope has no exception handler, so a failure here must not escape
+            // and take the process (and enforcement) down with it (invariant 9).
+            try {
+                app.repository.expireAllDue()
+                // Today's plan step, then re-read the limit it may have just lowered. Also picks
+                // up a raised limit that took effect at midnight while the app was away.
+                ReelPlan.refresh(context, app.repository)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: RuntimeException) {
+                Log.w("HomeScreen", "resume refresh failed", e)
+            }
+            withContext(Dispatchers.Main) {
+                reelLimit = ReelLimit.todayLimit(context)
+                plan = ReelPlan.current(context)
+                quiet = ReelPlan.quietHours(context)
+            }
+        }
+        onPauseOrDispose { job.cancel() }
     }
 
     // Screen time is re-read every minute while this screen is in front, and never while it's
     // in the background: a usage replay walks every event since midnight, which is cheap once a
-    // minute and wasteful on a timer nobody is looking at.
+    // minute and wasteful on a timer nobody is looking at. Each read is also archived, so today
+    // is in History's archive even if History is never opened.
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     LaunchedEffect(hasUsageAccess) {
         if (!hasUsageAccess) {
@@ -138,13 +174,25 @@ fun HomeScreen(
         }
         lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
             while (true) {
-                usage = withContext(Dispatchers.IO) {
+                val day = withContext(Dispatchers.IO) {
                     // Usage access can be revoked between the check and the query.
                     runCatching { UsageStatsProvider.history(context, 1).last() }.getOrNull()
                 }
+                usage = day
+                if (day != null) app.repository.archiveUsage(listOf(day))
                 delay(USAGE_REFRESH_MS)
             }
         }
+    }
+
+    if (editingLimit) {
+        ReelLimitDialog(
+            onDismiss = { editingLimit = false },
+            onDone = {
+                editingLimit = false
+                reelLimit = ReelLimit.todayLimit(context)
+            },
+        )
     }
 
     val isProtected = isAdminActive && isAccessibilityActive
@@ -152,16 +200,15 @@ fun HomeScreen(
     val lockedPackages = remember(locks) { locks.map { it.packageName }.toSet() }
 
     Box(Modifier.fillMaxSize()) {
-        AmbientGlow()
         LazyColumn(
             Modifier.fillMaxSize(),
             contentPadding = PaddingValues(start = ScreenPadding, end = ScreenPadding, bottom = 24.dp),
         ) {
-            item {
-                Reveal(0) { Header(isProtected = isProtected, onFixSetup = onFixSetup) }
+            item(key = "header") {
+                Reveal(0) { Header(today = today, isProtected = isProtected, onFixSetup = onFixSetup) }
             }
             if (!isProtected) {
-                item {
+                item(key = "setup") {
                     Reveal(1) {
                         SetupWarning(
                             isAdminActive = isAdminActive,
@@ -172,21 +219,47 @@ fun HomeScreen(
                     Spacer(Modifier.height(12.dp))
                 }
             }
-            item {
+            item(key = "reels") {
                 Reveal(2) {
+                    ReelHero(
+                        counts = reelCounts,
+                        isCounting = isAccessibilityActive,
+                        limit = reelLimit,
+                        plan = plan,
+                        quiet = quiet,
+                        today = today,
+                        onOpen = { onHistory(today) },
+                        onSetLimit = { editingLimit = true },
+                        onPlan = onPlan,
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+            }
+            item(key = "week") {
+                Reveal(3) {
+                    WeekStrip(
+                        today = today,
+                        days = week,
+                        limit = reelLimit,
+                        onPick = { onHistory(it) },
+                        onSeeAll = { onHistory(null) },
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+            }
+            item(key = "screen") {
+                Reveal(4) {
                     ScreenTimePanel(
                         usage = usage,
                         hasAccess = hasUsageAccess,
-                        onOpen = onInsights,
+                        onOpen = { onHistory(today) },
                         onGrant = { openUsageAccessSettings(context) },
                     )
                 }
                 Spacer(Modifier.height(12.dp))
-                Reveal(3) {
-                    ReelsPanel(counts = reelCounts, isCounting = isAccessibilityActive, onOpen = onInsights)
-                }
-                Spacer(Modifier.height(12.dp))
-                Reveal(4) {
+            }
+            item(key = "actions") {
+                Reveal(5) {
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         PrimaryButton(
                             "Focus mode",
@@ -205,36 +278,32 @@ fun HomeScreen(
             }
 
             if (locks.isNotEmpty()) {
-                item { Reveal(5) { SectionHeader("Locked now") } }
-                itemsIndexed(locks, key = { _, lock -> lock.packageName }) { index, lock ->
-                    Reveal(6 + index, Modifier.animateItem()) {
-                        LockCard(lock = lock, now = now)
-                    }
+                item(key = "locks-header") { SectionHeader("Locked now") }
+                itemsIndexed(locks, key = { _, lock -> lock.packageName }) { _, lock ->
+                    Box(Modifier.animateItem()) { LockCard(lock = lock) }
                     Spacer(Modifier.height(10.dp))
                 }
             }
 
             val apps = usage?.apps.orEmpty()
             if (apps.isNotEmpty()) {
-                item {
-                    Reveal(6 + locks.size) {
-                        Column {
-                            SectionHeader("Your apps today", action = "See all", onAction = onInsights)
-                            Panel(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp)) {
-                                val shown = apps.take(MAX_APPS_ON_HOME)
-                                val max = shown.first().foregroundMillis
-                                shown.forEachIndexed { index, appUsage ->
-                                    if (index > 0) {
-                                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                                    }
-                                    AppUsageRow(
-                                        usage = appUsage,
-                                        maxMillis = max,
-                                        reels = reelsByPackage[appUsage.packageName] ?: 0,
-                                        isLocked = appUsage.packageName in lockedPackages,
-                                        onLock = { onLockApp(appUsage.packageName) },
-                                    )
+                item(key = "apps") {
+                    Column {
+                        SectionHeader("Your apps today", action = "History", onAction = { onHistory(today) })
+                        Panel(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp)) {
+                            val shown = apps.take(MAX_APPS_ON_HOME)
+                            val max = shown.first().foregroundMillis
+                            shown.forEachIndexed { index, appUsage ->
+                                if (index > 0) {
+                                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                                 }
+                                AppUsageRow(
+                                    usage = appUsage,
+                                    maxMillis = max,
+                                    reels = reelsByPackage[appUsage.packageName] ?: 0,
+                                    isLocked = appUsage.packageName in lockedPackages,
+                                    onLock = { onLockApp(appUsage.packageName) },
+                                )
                             }
                         }
                     }
@@ -244,37 +313,9 @@ fun HomeScreen(
     }
 }
 
-/**
- * A large, very faint Volt glow drifting slowly behind the top of the screen. It gives the dark
- * page some depth and a sense that it's live, without competing with any figure on it.
- */
 @Composable
-private fun AmbientGlow() {
-    val transition = rememberInfiniteTransition(label = "glow")
-    val drift by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(GLOW_DRIFT_MS, easing = LinearEasing), RepeatMode.Reverse),
-        label = "drift",
-    )
-    val glow = MaterialTheme.colorScheme.primary
-    Canvas(Modifier.fillMaxSize()) {
-        val center = Offset(size.width * (0.15f + 0.7f * drift), size.height * 0.08f)
-        drawCircle(
-            brush = Brush.radialGradient(
-                colors = listOf(glow.copy(alpha = 0.10f), Color.Transparent),
-                center = center,
-                radius = size.width * 0.9f,
-            ),
-            radius = size.width * 0.9f,
-            center = center,
-        )
-    }
-}
-
-@Composable
-private fun Header(isProtected: Boolean, onFixSetup: () -> Unit) {
-    val date = remember { LocalDate.now().format(DateTimeFormatter.ofPattern("EEEE, d MMM", Locale.getDefault())) }
+private fun Header(today: LocalDate, isProtected: Boolean, onFixSetup: () -> Unit) {
+    val date = remember(today) { today.format(DateTimeFormatter.ofPattern("EEEE, d MMM", Locale.getDefault())) }
     Row(
         Modifier
             .fillMaxWidth()
@@ -329,6 +370,271 @@ private fun SetupWarning(isAdminActive: Boolean, isAccessibilityActive: Boolean,
     }
 }
 
+/**
+ * Today's reels as the hero of the screen: a ring filling towards the limit, the plan's week, and
+ * the reel-free hours. Kept visible at zero rather than hidden, because the point is to see the
+ * number before opening a feed.
+ */
+@Composable
+private fun ReelHero(
+    counts: List<ReelCountEntity>,
+    isCounting: Boolean,
+    limit: Int?,
+    plan: ReelPlan.Plan?,
+    quiet: ReelPlan.QuietHours?,
+    today: LocalDate,
+    onOpen: () -> Unit,
+    onSetLimit: () -> Unit,
+    onPlan: () -> Unit,
+) {
+    val total = counts.sumOf { it.reels }
+    val watchMs = counts.sumOf { it.watchMs }
+    // A limit of 0 is "no reels today": the ring is full from the first reel, and empty before.
+    val fraction = when {
+        limit == null -> 0f
+        limit == 0 -> if (total > 0) 1f else 0f
+        else -> total.toFloat() / limit
+    }
+    Panel(onClick = onOpen) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Eyebrow("Reels today", color = Ember, modifier = Modifier.weight(1f))
+            Text(
+                when (limit) {
+                    null -> "Set a limit"
+                    0 -> "No reels"
+                    else -> "Limit $limit"
+                },
+                style = MaterialTheme.typography.labelLarge,
+                color = Ember,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(EmberWash)
+                    .clickable(onClick = onSetLimit)
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+            )
+        }
+        Spacer(Modifier.height(16.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            ProgressRing(fraction = fraction, size = 148.dp, stroke = 13.dp) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    AnimatedCount(total, style = MaterialTheme.typography.displayMedium)
+                    Text(
+                        when (limit) {
+                            null -> "reels"
+                            0 -> "of 0"
+                            else -> "of $limit"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            Spacer(Modifier.width(18.dp))
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (limit != null) {
+                    HeroFact(
+                        value = when {
+                            total >= limit -> "Done"
+                            else -> "${limit - total}"
+                        },
+                        label = when {
+                            limit == 0 -> "reels are off"
+                            total >= limit -> "reels are off till midnight"
+                            else -> "left today"
+                        },
+                    )
+                }
+                if (watchMs > 0L) {
+                    HeroFact(value = formatHoursMinutes(watchMs), label = "spent watching")
+                }
+                if (quiet != null) {
+                    val minute = LocalTime.now().let { it.hour * 60 + it.minute }
+                    QuietChip(quiet = quiet, now = quiet.contains(minute))
+                }
+            }
+        }
+
+        val note = when {
+            // Mirrors the SDK gate in AppBlockAccessibilityService.onServiceConnected.
+            Build.VERSION.SDK_INT < Build.VERSION_CODES.P -> "Counting needs Android 9 or newer."
+            !isCounting -> "Counting is paused while Accessibility is off."
+            total == 0 && limit == null ->
+                "Short videos in Instagram, YouTube, TikTok, Reddit, LinkedIn and the like add up here."
+            else -> null
+        }
+        if (note != null) {
+            Spacer(Modifier.height(12.dp))
+            Text(note, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+
+        Spacer(Modifier.height(16.dp))
+        PlanStrip(plan = plan, today = today, onClick = onPlan)
+
+        if (counts.isNotEmpty()) {
+            Spacer(Modifier.height(14.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                counts.take(MAX_REEL_APPS_SHOWN).forEach { ReelAppChip(it) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HeroFact(value: String, label: String) {
+    Column {
+        Text(value, style = MaterialTheme.typography.titleLarge)
+        Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun QuietChip(quiet: ReelPlan.QuietHours, now: Boolean) {
+    Row(
+        Modifier
+            .clip(RoundedCornerShape(50))
+            .background(if (now) EmberWash else MaterialTheme.colorScheme.surfaceContainerHigh)
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            Icons.Outlined.Bedtime,
+            contentDescription = null,
+            tint = if (now) Ember else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.width(16.dp),
+        )
+        Spacer(Modifier.width(6.dp))
+        Text(
+            if (now) "Reel-free now" else quiet.label(),
+            style = MaterialTheme.typography.labelMedium,
+            color = if (now) Ember else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/** The plan's progress in one tappable line, or an invitation to build one. */
+@Composable
+private fun PlanStrip(plan: ReelPlan.Plan?, today: LocalDate, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            if (plan == null) {
+                Text("Build a reel plan", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    "Five questions, then a limit that steps down each week",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                val week = plan.weekOf(today)
+                Text(
+                    "Week ${week + 1} of ${plan.weeks} · ${plan.goal.title}",
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                Spacer(Modifier.height(6.dp))
+                Meter((week + 1) / plan.weeks.toFloat(), Lime, height = 4.dp)
+            }
+        }
+        Spacer(Modifier.width(8.dp))
+        Icon(
+            Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/**
+ * The last seven days of reels as tappable columns, today last, with the limit as a faint line.
+ * Each opens that day in History; the header opens the month.
+ */
+@Composable
+private fun WeekStrip(
+    today: LocalDate,
+    days: List<ReelDayTotal>,
+    limit: Int?,
+    onPick: (LocalDate) -> Unit,
+    onSeeAll: () -> Unit,
+) {
+    val byDay = remember(days) { days.associateBy { it.day } }
+    val dates = remember(today) { List(7) { today.minusDays(6L - it) } }
+    val values = dates.map { byDay[it.toString()]?.reels ?: 0 }
+    val max = maxOf(values.maxOrNull() ?: 0, limit ?: 0, 1)
+    Panel {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Eyebrow("Last 7 days", modifier = Modifier.weight(1f))
+            Text(
+                "Calendar",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .clickable(onClick = onSeeAll)
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+            )
+        }
+        Spacer(Modifier.height(12.dp))
+        Row(Modifier.fillMaxWidth().height(116.dp)) {
+            dates.forEachIndexed { index, date ->
+                val value = values[index]
+                val isToday = index == dates.lastIndex
+                val over = limit != null && value > limit
+                Column(
+                    Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .clip(RoundedCornerShape(14.dp))
+                        .clickable { onPick(date) }
+                        .padding(vertical = 4.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text(
+                        if (value > 0) "$value" else "·",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = if (over) Ember else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Box(
+                        Modifier
+                            .weight(1f)
+                            .width(18.dp),
+                        contentAlignment = Alignment.BottomCenter,
+                    ) {
+                        val share = value / max.toFloat()
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .fillMaxHeight(share.coerceIn(0.04f, 1f))
+                                .clip(RoundedCornerShape(50))
+                                .background(
+                                    when {
+                                        value == 0 -> MaterialTheme.colorScheme.surfaceContainerHigh
+                                        over -> Ember
+                                        isToday -> Lime
+                                        else -> Lime.copy(alpha = 0.45f)
+                                    },
+                                ),
+                        )
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        date.dayOfWeek.getDisplayName(TextStyle.NARROW, Locale.getDefault()),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = if (isToday) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                    )
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun ScreenTimePanel(usage: DayUsage?, hasAccess: Boolean, onOpen: () -> Unit, onGrant: () -> Unit) {
     if (!hasAccess) {
@@ -339,9 +645,9 @@ private fun ScreenTimePanel(usage: DayUsage?, hasAccess: Boolean, onOpen: () -> 
         Eyebrow("Screen time")
         Spacer(Modifier.height(6.dp))
         if (usage == null) {
-            Text("—", style = MaterialTheme.typography.displayLarge)
+            Text("—", style = MaterialTheme.typography.displayMedium)
         } else {
-            AnimatedDuration(usage.totalMillis, MaterialTheme.typography.displayLarge)
+            AnimatedDuration(usage.totalMillis, MaterialTheme.typography.displayMedium)
         }
         Spacer(Modifier.height(14.dp))
         Row(Modifier.fillMaxWidth()) {
@@ -360,63 +666,9 @@ private fun ScreenTimePanel(usage: DayUsage?, hasAccess: Boolean, onOpen: () -> 
     }
 }
 
-/**
- * Today's short-form video total, fed by ReelTracker through the accessibility service, with
- * the top few apps underneath so it's clear where the number came from. Kept visible at zero
- * rather than hidden, because the point is to see the number before opening a feed.
- */
-@Composable
-private fun ReelsPanel(counts: List<ReelCountEntity>, isCounting: Boolean, onOpen: () -> Unit) {
-    val total = counts.sumOf { it.reels }
-    val watchMs = counts.sumOf { it.watchMs }
-    Panel(onClick = onOpen) {
-        Row(verticalAlignment = Alignment.Bottom) {
-            Column(Modifier.weight(1f)) {
-                Eyebrow("Reels today", color = Ember)
-                Spacer(Modifier.height(6.dp))
-                AnimatedCount(
-                    total,
-                    style = MaterialTheme.typography.displayMedium,
-                    color = if (total > 0) Ember else MaterialTheme.colorScheme.onSurface,
-                )
-            }
-            if (watchMs > 0L) {
-                Column(horizontalAlignment = Alignment.End) {
-                    AnimatedDuration(watchMs, MaterialTheme.typography.titleLarge)
-                    Text(
-                        "spent watching",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-        }
-
-        val note = when {
-            // Mirrors the SDK gate in AppBlockAccessibilityService.onServiceConnected.
-            Build.VERSION.SDK_INT < Build.VERSION_CODES.P -> "Counting needs Android 9 or newer."
-            !isCounting -> "Counting is paused while Accessibility is off."
-            total == 0 -> "Reels, Shorts, TikTok, and swipe-up videos in any app add up here."
-            else -> null
-        }
-        if (note != null) {
-            Spacer(Modifier.height(6.dp))
-            Text(note, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-
-        if (counts.isNotEmpty()) {
-            Spacer(Modifier.height(14.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                counts.take(MAX_REEL_APPS_SHOWN).forEach { ReelAppChip(it) }
-            }
-        }
-    }
-}
-
 @Composable
 private fun ReelAppChip(entry: ReelCountEntity) {
-    val context = LocalContext.current
-    val identity = remember(entry.packageName) { loadAppIdentity(context, entry.packageName) }
+    val identity = rememberAppIdentity(entry.packageName)
     Row(
         Modifier
             .background(EmberWash, RoundedCornerShape(50))
@@ -429,10 +681,20 @@ private fun ReelAppChip(entry: ReelCountEntity) {
     }
 }
 
+/**
+ * One running lock. It owns its one-second ticker, so a tick recomposes this card and nothing
+ * else on the screen.
+ */
 @Composable
-private fun LockCard(lock: BlockedAppEntity, now: Long) {
-    val context = LocalContext.current
-    val identity = remember(lock.packageName) { loadAppIdentity(context, lock.packageName) }
+private fun LockCard(lock: BlockedAppEntity) {
+    val identity = rememberAppIdentity(lock.packageName)
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(lock.blockUntil) {
+        while (now < lock.blockUntil) {
+            delay(1000L)
+            now = System.currentTimeMillis()
+        }
+    }
     val remaining = (lock.blockUntil - now).coerceAtLeast(0L)
     val total = (lock.blockUntil - lock.blockedAt).coerceAtLeast(1L)
     val elapsedFraction = ((total - remaining).toFloat() / total).coerceIn(0f, 1f)
@@ -466,10 +728,10 @@ private fun LockCard(lock: BlockedAppEntity, now: Long) {
  */
 private const val MAX_REEL_APPS_SHOWN = 4
 
-/** The rest of the list is one tap away on InsightsScreen. */
+/** The rest of the list is one tap away on HistoryScreen. */
 private const val MAX_APPS_ON_HOME = 6
 
 private const val USAGE_REFRESH_MS = 60_000L
 
-/** One sweep of the background glow across the top. Slow enough to notice only over time. */
-private const val GLOW_DRIFT_MS = 14_000
+/** How often the screen checks whether midnight has passed. */
+private const val DAY_CHECK_MS = 60_000L

@@ -9,19 +9,15 @@ import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -39,71 +35,49 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.AccessibilityNew
-import androidx.compose.material.icons.filled.Alarm
-import androidx.compose.material.icons.filled.BarChart
-import androidx.compose.material.icons.filled.BatteryChargingFull
-import androidx.compose.material.icons.filled.Celebration
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material.icons.filled.Shield
-import androidx.compose.material.icons.filled.WarningAmber
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.outlined.AccessibilityNew
+import androidx.compose.material.icons.outlined.Alarm
+import androidx.compose.material.icons.outlined.BarChart
+import androidx.compose.material.icons.outlined.BatteryChargingFull
+import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.Notifications
+import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.blockapp.android.admin.DeviceAdminHelper
+import com.blockapp.android.admin.RestrictedSettings
 import com.blockapp.android.ui.theme.StatusColors
 import com.blockapp.android.usage.UsageStatsProvider
 
-// ── data model ────────────────────────────────────────────────────────────────
-private data class SetupStep(
-    val icon: ImageVector,
-    val title: String,
-    val rationale: String,
-    /**
-     * What to tap once the button lands them in Settings. Every deep link below drops the user on
-     * a *list* screen, never on the toggle itself, and on a stock ROM the app is several taps
-     * down an unlabelled hierarchy — leaving that unsaid is where first-time setup actually
-     * stalls, so the taps are spelled out rather than left to be discovered.
-     */
-    val howTo: List<String>,
-    val buttonLabel: String,
-    val isGranted: Boolean,
-    /** Non-null disables the action and says why; used to hold steps to a workable order. */
-    val blockedReason: String? = null,
-    val onClick: () -> Unit,
-)
-
-// ── screen ────────────────────────────────────────────────────────────────────
-@OptIn(ExperimentalMaterial3Api::class)
+/**
+ * First-time setup, and where Settings → Permissions lands later. Two required steps
+ * (Accessibility, then Device Admin) shown one at a time, then four optional reliability extras.
+ *
+ * Invariant 1 lives here too: "Remove protection" stays in the header on every state of this
+ * screen, because a user whose admin is active but whose setup broke comes here first.
+ *
+ * The Accessibility step is a three-part walk-through on Android 13+, in the only order that
+ * works on a sideloaded install: see RestrictedSettings for why App info's ⋮ item doesn't exist
+ * until the switch has been tried once.
+ */
 @Composable
 fun OnboardingScreen(
     onBack: () -> Unit,
@@ -112,29 +86,50 @@ fun OnboardingScreen(
 ) {
     val context = LocalContext.current
 
-    var isAccessibilityActive  by remember { mutableStateOf(false) }
-    var isAdminActive          by remember { mutableStateOf(false) }
+    var isAccessibilityActive  by remember { mutableStateOf(DeviceAdminHelper.isAccessibilityActive(context)) }
+    var isAdminActive          by remember { mutableStateOf(DeviceAdminHelper.isAdminActive(context)) }
     var isBatteryUnrestricted  by remember { mutableStateOf(false) }
     var canScheduleExactAlarms by remember { mutableStateOf(false) }
     var hasNotifications       by remember { mutableStateOf(false) }
     var hasUsageAccess         by remember { mutableStateOf(false) }
+    var triedSwitch            by remember { mutableStateOf(RestrictedSettings.triedSwitch(context)) }
+    var openedAppInfo          by remember { mutableStateOf(RestrictedSettings.openedAppInfo(context)) }
+    val likelyRestricted       = remember { RestrictedSettings.likelyRestricted(context) }
 
     /**
      * Device Admin is launched through an activity-result launcher rather than
-     * `context.startActivity(...)` like every other step on this screen, and that difference is
-     * load-bearing: Settings' `DeviceAdminAdd` calls `finish()` immediately if the intent that
-     * started it carries `FLAG_ACTIVITY_NEW_TASK` (see DeviceAdminHelper.requestAdminIntent).
-     * Launching through the registry starts it for a result from MainActivity itself, so the
-     * intent reaches Settings with no task flags at all and the activation dialog actually shows.
+     * `context.startActivity(...)`, and that difference is load-bearing: Settings'
+     * `DeviceAdminAdd` calls `finish()` immediately if the intent that started it carries
+     * `FLAG_ACTIVITY_NEW_TASK` (see DeviceAdminHelper.requestAdminIntent). Launching through the
+     * registry starts it for a result from MainActivity itself, so the intent reaches Settings
+     * with no task flags at all and the activation dialog actually shows.
      *
      * The result is ignored — the user can back out of the system dialog without a cancel result
-     * on some builds — so admin state is re-read from DevicePolicyManager instead of trusted from
-     * the result code.
+     * on some builds — so admin state is re-read from DevicePolicyManager instead.
      */
     val adminLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) {
         isAdminActive = DeviceAdminHelper.isAdminActive(context)
+    }
+
+    /**
+     * For a result for the same reason as admin, but a different one: Settings only opens a
+     * service's own switch page (RestrictedSettings.accessibilityDetailsIntent) when it can see
+     * which package asked, and a calling package exists only for a for-result start.
+     */
+    val accessibilityLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) {
+        isAccessibilityActive = DeviceAdminHelper.isAccessibilityActive(context)
+    }
+
+    fun openAccessibilitySwitch() {
+        try {
+            accessibilityLauncher.launch(RestrictedSettings.accessibilityDetailsIntent(context))
+        } catch (e: ActivityNotFoundException) {
+            openOrExplain(context, RestrictedSettings.accessibilityListIntent(), "Settings → Accessibility")
+        }
     }
 
     // Re-check every time this screen resumes (e.g. coming back from Settings).
@@ -148,609 +143,557 @@ fun OnboardingScreen(
         onPauseOrDispose {}
     }
 
-    // ── required: without these the app does not block anything ──────────────
-    val requiredSteps = remember(isAccessibilityActive, isAdminActive) {
-        listOf(
-            SetupStep(
-                icon        = Icons.Filled.AccessibilityNew,
-                title       = "Accessibility Service",
-                rationale   = "Detects when a locked app comes to the foreground so it can " +
-                    "redirect you away — entirely on-device. It does not read what you type or " +
-                    "capture your screen.",
-                howTo       = listOf(
-                    "Find \"App Blocker\" — usually under Installed apps / Downloaded apps",
-                    "Turn the toggle on",
-                    "Confirm on the system dialog that appears",
-                ),
-                buttonLabel = "Open Accessibility settings",
-                isGranted   = isAccessibilityActive,
-                onClick     = {
-                    context.startActivity(
-                        Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
-                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                    )
-                },
-            ),
-            SetupStep(
-                icon        = Icons.Filled.Shield,
-                title       = "Device Admin",
-                rationale   = "Makes Android require deactivating admin before the app can be " +
-                    "uninstalled, so it can't be removed in a couple of taps mid-lock. To turn " +
-                    "it off later use \"Remove protection\" at the top of this screen — not " +
-                    "system settings.",
-                howTo       = listOf(
-                    "Read the warning Android shows",
-                    "Tap \"Activate this device admin app\"",
-                ),
-                buttonLabel = "Activate Device Admin",
-                isGranted   = isAdminActive,
-                // Order matters, and getting it wrong is confusing rather than harmful: once
-                // Device Admin is active the accessibility service's Tier 1 guard arms, and it
-                // bounces the Accessibility settings screen. Activating admin first means the
-                // moment the user finally flips the Accessibility toggle on, the service starts
-                // and immediately kicks them out of the screen they're standing in.
-                blockedReason = if (isAccessibilityActive) {
-                    null
-                } else {
-                    "Turn on the Accessibility Service first — once admin is active, this app " +
-                        "starts guarding the Accessibility screen and you'd be bounced out of it " +
-                        "mid-setup."
-                },
-                onClick     = {
-                    val intent = DeviceAdminHelper.requestAdminIntent(
-                        context,
-                        "Prevents the app being uninstalled while a lock is active.",
-                    )
-                    try {
-                        adminLauncher.launch(intent)
-                    } catch (e: ActivityNotFoundException) {
-                        // A handful of OEM builds don't expose DeviceAdminAdd to third-party
-                        // apps. Nothing to fall back to — there is no other intent that adds an
-                        // admin — so say where to do it by hand rather than letting the tap
-                        // throw and take the setup screen down with it.
-                        Toast.makeText(
-                            context,
-                            "This device doesn't offer the Device Admin screen directly. Add " +
-                                "\"App Blocker\" under Settings → Security → Device admin apps.",
-                            Toast.LENGTH_LONG,
-                        ).show()
-                    }
-                },
-            ),
-        )
-    }
+    val requiredDone = listOf(isAccessibilityActive, isAdminActive).count { it }
+    val allRequired = requiredDone == 2
 
-    // ── recommended: blocking still works without these, less reliably ───────
-    val recommendedSteps = remember(
-        isBatteryUnrestricted, canScheduleExactAlarms, hasNotifications, hasUsageAccess,
+    Column(
+        Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState()),
     ) {
-        listOf(
-            SetupStep(
-                icon        = Icons.Filled.BatteryChargingFull,
-                title       = "Ignore battery optimisations",
-                rationale   = "Some manufacturers silently kill background services to save " +
-                    "power. Without this a lock can stop being enforced partway through.",
-                howTo       = emptyList(),
-                buttonLabel = "Allow",
-                isGranted   = isBatteryUnrestricted,
-                onClick     = { requestIgnoreBatteryOptimizations(context) },
-            ),
-            SetupStep(
-                icon        = Icons.Filled.Alarm,
-                title       = "Exact alarms",
-                rationale   = "Lifts a lock at the moment its timer ends instead of drifting " +
-                    "late. Without it locks still expire, just not always punctually.",
-                howTo       = emptyList(),
-                buttonLabel = "Allow",
-                isGranted   = canScheduleExactAlarms,
-                onClick     = { requestScheduleExactAlarm(context) },
-            ),
-            SetupStep(
-                icon        = Icons.Filled.Notifications,
-                title       = "Notifications",
-                rationale   = "Shows the ongoing \"blocking is active\" notification. Hidden, " +
-                    "the keep-alive service is a quieter target for battery managers to kill.",
-                howTo       = emptyList(),
-                buttonLabel = "Allow",
-                isGranted   = hasNotifications,
-                onClick     = { openNotificationSettings(context) },
-            ),
-            SetupStep(
-                icon        = Icons.Filled.BarChart,
-                title       = "Usage access",
-                rationale   = "Only used by the Screen time screen. Nothing else reads it, and " +
-                    "no usage data leaves the device.",
-                howTo       = emptyList(),
-                buttonLabel = "Allow",
-                isGranted   = hasUsageAccess,
-                onClick     = { openUsageAccessSettings(context) },
-            ),
+        ScreenHeader(
+            title = if (allRequired) "You're protected" else "Set up protection",
+            subtitle = if (allRequired) {
+                "Both switches are on. The extras below make locks harder to break."
+            } else {
+                "Two switches make blocking work. About a minute."
+            },
+            onBack = onBack,
+            actions = {
+                TextButton(onClick = onRemoveProtection) {
+                    Text("Remove protection", color = StatusColors.Danger)
+                }
+            },
         )
-    }
 
-    val requiredGranted = requiredSteps.count { it.isGranted }
-    val allRequired     = requiredGranted == requiredSteps.size
-    val extrasGranted   = recommendedSteps.count { it.isGranted }
-    val progress by animateFloatAsState(
-        targetValue   = requiredGranted.toFloat() / requiredSteps.size,
-        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
-        label         = "progress",
-    )
+        Column(Modifier.padding(horizontal = ScreenPadding)) {
+            SetupProgress(done = requiredDone, total = 2)
+            Spacer(Modifier.height(16.dp))
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Setup", fontWeight = FontWeight.SemiBold) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+            Reveal(0) {
+                StepPanel(
+                    number = 1,
+                    icon = Icons.Outlined.AccessibilityNew,
+                    title = "Accessibility",
+                    why = "Lets App Blocker see which app is in front, so it can send you away " +
+                        "from a locked one and count reels. Everything stays on this phone. It " +
+                        "doesn't record what you type or keep what's on screen.",
+                    state = if (isAccessibilityActive) StepState.Done else StepState.Active,
+                ) {
+                    if (RestrictedSettings.applies()) {
+                        AccessibilityWalkthrough(
+                            likelyRestricted = likelyRestricted,
+                            triedSwitch = triedSwitch,
+                            openedAppInfo = openedAppInfo,
+                            onTrySwitch = {
+                                RestrictedSettings.markTriedSwitch(context)
+                                triedSwitch = true
+                                openAccessibilitySwitch()
+                            },
+                            onOpenAppInfo = {
+                                RestrictedSettings.markOpenedAppInfo(context)
+                                openedAppInfo = true
+                                // Safe to open while this step is showing: the service isn't
+                                // running yet, so Tier 1 can't bounce this app's App info.
+                                openOrExplain(context, RestrictedSettings.appInfoIntent(context), "Settings → Apps → App Blocker")
+                            },
+                            onTurnOn = ::openAccessibilitySwitch,
+                        )
+                    } else {
+                        HowTo(
+                            listOf(
+                                "Find \"App Blocker\", usually under Downloaded apps",
+                                "Turn the switch on, then tap Allow",
+                            ),
+                        )
+                        Spacer(Modifier.height(14.dp))
+                        PrimaryButton("Open Accessibility", ::openAccessibilitySwitch, Modifier.fillMaxWidth())
                     }
-                },
-                actions = {
-                    TextButton(onClick = onRemoveProtection) {
-                        Text("Remove protection", color = StatusColors.Danger)
-                    }
-                },
-            )
-        },
-    ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .verticalScroll(rememberScrollState()),
-        ) {
-            ProgressHeader(
-                grantedCount = requiredGranted,
-                total        = requiredSteps.size,
-                progress     = progress,
-            )
-
-            // Only while the Accessibility toggle is still off — that's the exact moment the
-            // "Restricted setting" wall appears, and it's the single most common reason
-            // first-time setup dies before it starts on a sideloaded build.
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !isAccessibilityActive) {
-                RestrictedSettingsCard(onOpenAppInfo = { openAppInfo(context) })
-                Spacer(Modifier.height(12.dp))
+                }
             }
 
-            SectionHeader("Required", "Blocking does nothing without these")
+            Spacer(Modifier.height(12.dp))
 
-            requiredSteps.forEachIndexed { index, step ->
-                RequiredStepCard(step = step, index = index + 1, total = requiredSteps.size)
-                Spacer(Modifier.height(12.dp))
+            Reveal(1) {
+                StepPanel(
+                    number = 2,
+                    icon = Icons.Outlined.Shield,
+                    title = "Device admin",
+                    why = "Makes Android ask for admin to be turned off before App Blocker can " +
+                        "be uninstalled, so it can't go in two taps mid-lock. To undo it later, " +
+                        "use \"Remove protection\" at the top of this screen.",
+                    state = when {
+                        isAdminActive -> StepState.Done
+                        // Order matters: once admin is active the service's Tier 1 guard arms and
+                        // bounces the Accessibility screen. Admin first means the moment the user
+                        // finally flips the Accessibility switch on, the service starts and kicks
+                        // them out of the screen they're standing in.
+                        !isAccessibilityActive -> StepState.Waiting
+                        else -> StepState.Active
+                    },
+                    waitingNote = "Unlocks after step 1. Admin first would start guarding the " +
+                        "Accessibility screen and bounce you out of it mid-setup.",
+                ) {
+                    HowTo(listOf("Read the warning Android shows", "Tap \"Activate this device admin app\""))
+                    Spacer(Modifier.height(14.dp))
+                    PrimaryButton(
+                        "Activate device admin",
+                        onClick = {
+                            val intent = DeviceAdminHelper.requestAdminIntent(
+                                context,
+                                "Prevents the app being uninstalled while a lock is active.",
+                            )
+                            try {
+                                adminLauncher.launch(intent)
+                            } catch (e: ActivityNotFoundException) {
+                                // A handful of OEM builds don't expose DeviceAdminAdd to
+                                // third-party apps, and there is no other intent that adds an
+                                // admin, so say where to do it by hand rather than let the tap
+                                // throw and take the setup screen down with it.
+                                Toast.makeText(
+                                    context,
+                                    "This phone doesn't open the Device admin screen directly. Add " +
+                                        "\"App Blocker\" under Settings → Security → Device admin apps.",
+                                    Toast.LENGTH_LONG,
+                                ).show()
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
             }
 
             AnimatedVisibility(
                 visible = allRequired,
-                enter   = expandVertically() + fadeIn(),
-                exit    = shrinkVertically() + fadeOut(),
+                enter = expandVertically() + fadeIn(),
+                exit = shrinkVertically() + fadeOut(),
             ) {
                 Column {
-                    AllDoneBanner()
                     Spacer(Modifier.height(12.dp))
+                    Panel(color = StatusColors.Success.copy(alpha = 0.10f)) {
+                        Text("Protection is on", style = MaterialTheme.typography.titleMedium, color = StatusColors.Success)
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "Locked apps will be bounced from now on. It makes giving in harder, " +
+                                "not impossible: Safe Mode or Settings can still undo it.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
 
-            SectionHeader(
-                "Recommended",
-                "$extrasGranted of ${recommendedSteps.size} on — locks work without these, " +
-                    "just less reliably",
+            val extras = listOf(
+                Extra(
+                    Icons.Outlined.BatteryChargingFull,
+                    "Unrestricted battery",
+                    "Stops Android from putting App Blocker to sleep partway through a lock.",
+                    isBatteryUnrestricted,
+                ) { requestIgnoreBatteryOptimizations(context) },
+                Extra(
+                    Icons.Outlined.Alarm,
+                    "Exact alarms",
+                    "Ends a lock the minute its timer runs out, not a few minutes late.",
+                    canScheduleExactAlarms,
+                ) { requestScheduleExactAlarm(context) },
+                Extra(
+                    Icons.Outlined.Notifications,
+                    "Notifications",
+                    "Shows the \"blocking is on\" notification, which keeps the app from being killed quietly.",
+                    hasNotifications,
+                ) { openNotificationSettings(context) },
+                Extra(
+                    Icons.Outlined.BarChart,
+                    "Usage access",
+                    "Only for the screen-time charts. Nothing leaves the phone.",
+                    hasUsageAccess,
+                ) { openUsageAccessSettings(context) },
             )
-
-            recommendedSteps.forEach { step ->
-                RecommendedStepRow(step)
+            Spacer(Modifier.height(28.dp))
+            Row(verticalAlignment = Alignment.Bottom) {
+                Text("Make it reliable", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                Text(
+                    "${extras.count { it.granted }} of ${extras.size} on",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Optional. Locks work without these, just less dependably.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(12.dp))
+            extras.forEachIndexed { index, extra ->
+                Reveal(2 + index) { ExtraRow(extra) }
                 Spacer(Modifier.height(8.dp))
             }
 
-            Spacer(Modifier.height(12.dp))
-
+            Spacer(Modifier.height(20.dp))
             // Gated on the required steps only. Holding the user here until every optional
-            // reliability extra is granted was the old behaviour and it made the screen feel
-            // like a dead end on OEMs that don't expose one of them at all.
-            Button(
-                onClick  = onDone,
-                enabled  = allRequired,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp)
-                    .height(52.dp),
-                shape = RoundedCornerShape(14.dp),
-            ) {
-                Text(
-                    if (allRequired) "Done →" else "Finish the required steps to continue",
-                    fontWeight = FontWeight.SemiBold,
-                )
-            }
-
-            Spacer(Modifier.height(24.dp))
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 24.dp),
-            ) {
+            // extra was granted made the screen a dead end on OEMs that don't offer one of them.
+            PrimaryButton(
+                if (allRequired) "Done" else "Finish steps 1 and 2 first",
+                onClick = onDone,
+                enabled = allRequired,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(20.dp))
+            Row(verticalAlignment = Alignment.Top) {
                 Icon(
-                    Icons.Filled.Lock,
+                    Icons.Outlined.Lock,
                     contentDescription = null,
-                    modifier = Modifier.size(16.dp),
+                    modifier = Modifier.size(14.dp).padding(top = 2.dp),
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Spacer(Modifier.width(6.dp))
+                Spacer(Modifier.width(8.dp))
                 Text(
-                    "Everything runs entirely on this device. No usage data, screen content, " +
-                        "or app list is ever transmitted anywhere.",
-                    style     = MaterialTheme.typography.labelSmall,
-                    color     = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
+                    "App Blocker has no internet permission. Nothing it sees can leave this phone.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(24.dp))
         }
     }
 }
 
-// ── progress header ────────────────────────────────────────────────────────────
+// ── progress ───────────────────────────────────────────────────────────────────
+
+/** One bar per required step, filling in Lime as each is done. */
 @Composable
-private fun ProgressHeader(grantedCount: Int, total: Int, progress: Float) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-    ) {
-        Row(
-            modifier              = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment     = Alignment.CenterVertically,
-        ) {
-            Text(
-                "Required permissions",
-                style      = MaterialTheme.typography.titleSmall,
-                color      = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontWeight = FontWeight.Medium,
+private fun SetupProgress(done: Int, total: Int) {
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+        repeat(total) { index ->
+            val fill by animateColorAsState(
+                if (index < done) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh,
+                tween(PROGRESS_FADE_MS),
+                label = "segment",
             )
-            Text(
-                "$grantedCount / $total",
-                style      = MaterialTheme.typography.titleSmall,
-                color      = if (grantedCount == total) StatusColors.Success else MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.Bold,
+            Box(
+                Modifier
+                    .weight(1f)
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(fill),
             )
         }
-        Spacer(Modifier.height(8.dp))
-        LinearProgressIndicator(
-            progress   = { progress },
-            modifier   = Modifier
-                .fillMaxWidth()
-                .height(6.dp)
-                .clip(RoundedCornerShape(50)),
-            color      = if (grantedCount == total) StatusColors.Success else MaterialTheme.colorScheme.primary,
-            trackColor = MaterialTheme.colorScheme.surfaceVariant,
-            strokeCap  = StrokeCap.Round,
-        )
     }
 }
 
-// ── section header ─────────────────────────────────────────────────────────────
-@Composable
-private fun SectionHeader(title: String, subtitle: String) {
-    Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-        Text(
-            title.uppercase(),
-            style      = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.Bold,
-            color      = MaterialTheme.colorScheme.primary,
-        )
-        Text(
-            subtitle,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}
+// ── required step ──────────────────────────────────────────────────────────────
 
-// ── restricted-settings explainer ──────────────────────────────────────────────
+private enum class StepState { Done, Active, Waiting }
+
 /**
- * Android 13+ refuses to let a sideloaded app turn on an Accessibility Service until "Allow
- * restricted settings" has been tapped in that app's App info — the toggle is simply inert and
- * the only feedback is a one-line dialog most people dismiss. There is no API to query that
- * state, so this can't be a verifiable step with a tick; it's shown as a heads-up for as long as
- * Accessibility is off and quietly disappears once the toggle takes.
- *
- * Opening App info from here is safe specifically because it's only shown while Accessibility is
- * off: the service isn't running, so the Tier 1 guard that normally bounces this app's App info
- * screen (see AppBlockAccessibilityService) can't fire.
+ * A required step. Only the active one is open; a done step collapses to its title and a tick,
+ * and a waiting one shows why it's waiting, so the screen always has exactly one thing to do.
  */
 @Composable
-private fun RestrictedSettingsCard(onOpenAppInfo: () -> Unit) {
-    Card(
-        modifier  = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp),
-        shape     = RoundedCornerShape(16.dp),
-        colors    = CardDefaults.cardColors(containerColor = StatusColors.Warning.copy(alpha = 0.10f)),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-    ) {
-        Column(Modifier.padding(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Filled.WarningAmber, contentDescription = null, tint = StatusColors.Warning)
-                Spacer(Modifier.width(10.dp))
+private fun StepPanel(
+    number: Int,
+    icon: ImageVector,
+    title: String,
+    why: String,
+    state: StepState,
+    waitingNote: String? = null,
+    content: @Composable () -> Unit,
+) {
+    val edge by animateColorAsState(
+        when (state) {
+            StepState.Active -> MaterialTheme.colorScheme.primary.copy(alpha = 0.55f)
+            else -> Color.Transparent
+        },
+        tween(PROGRESS_FADE_MS),
+        label = "stepEdge",
+    )
+    Panel(modifier = Modifier.border(1.dp, edge, PanelShape)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            StepBadge(number, state)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Eyebrow("Step $number")
                 Text(
-                    "Accessibility toggle greyed out?",
-                    style      = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold,
-                    color      = StatusColors.Warning,
+                    title,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = if (state == StepState.Waiting) {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    } else {
+                        MaterialTheme.colorScheme.onSurface
+                    },
                 )
             }
+            Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        AnimatedVisibility(
+            visible = state == StepState.Active,
+            enter = expandVertically(tween(STEP_EXPAND_MS)) + fadeIn(tween(STEP_EXPAND_MS)),
+            exit = shrinkVertically(tween(STEP_EXPAND_MS)) + fadeOut(tween(STEP_EXPAND_MS / 2)),
+        ) {
+            Column {
+                Spacer(Modifier.height(10.dp))
+                Text(why, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(14.dp))
+                content()
+            }
+        }
+        if (state == StepState.Waiting && waitingNote != null) {
             Spacer(Modifier.height(8.dp))
-            Text(
-                "Android blocks sideloaded apps from turning on an Accessibility Service until " +
-                    "you allow it once. If you see \"Restricted setting\", do this first:",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(10.dp))
-            listOf(
-                "Open App info below",
-                "Tap ⋮ in the top-right corner",
-                "Tap \"Allow restricted settings\"",
-                "Come back and turn on Accessibility",
-            ).forEachIndexed { index, line ->
-                Row(Modifier.padding(vertical = 2.dp)) {
-                    Text(
-                        "${index + 1}.",
-                        style      = MaterialTheme.typography.bodySmall,
-                        fontWeight = FontWeight.Bold,
-                        color      = StatusColors.Warning,
-                        modifier   = Modifier.width(20.dp),
-                    )
-                    Text(
-                        line,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            Spacer(Modifier.height(12.dp))
-            OutlinedButton(
-                onClick  = onOpenAppInfo,
-                modifier = Modifier.fillMaxWidth(),
-                shape    = RoundedCornerShape(10.dp),
-            ) {
-                Text("Open App info", fontWeight = FontWeight.Medium)
-            }
+            Text(waitingNote, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
 
-// ── required step card ─────────────────────────────────────────────────────────
 @Composable
-private fun RequiredStepCard(step: SetupStep, index: Int, total: Int) {
-    val cardBg by animateColorAsState(
-        targetValue   = if (step.isGranted) StatusColors.Success.copy(alpha = 0.08f) else MaterialTheme.colorScheme.surfaceVariant,
-        animationSpec = tween(durationMillis = 500),
-        label         = "cardBg",
+private fun StepBadge(number: Int, state: StepState) {
+    val fill by animateColorAsState(
+        when (state) {
+            StepState.Done -> StatusColors.Success
+            StepState.Active -> MaterialTheme.colorScheme.primary
+            StepState.Waiting -> Color.Transparent
+        },
+        tween(PROGRESS_FADE_MS),
+        label = "badge",
     )
-
-    Card(
-        modifier  = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp),
-        shape     = RoundedCornerShape(16.dp),
-        colors    = CardDefaults.cardColors(containerColor = cardBg),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+    Box(
+        Modifier
+            .size(32.dp)
+            .clip(CircleShape)
+            .background(fill)
+            .then(
+                if (state == StepState.Waiting) {
+                    Modifier.border(1.5.dp, MaterialTheme.colorScheme.outline, CircleShape)
+                } else {
+                    Modifier
+                },
+            ),
+        contentAlignment = Alignment.Center,
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
+        if (state == StepState.Done) {
+            Icon(Icons.Filled.Check, contentDescription = "Done", tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(18.dp))
+        } else {
+            Text(
+                "$number",
+                style = MaterialTheme.typography.labelLarge,
+                color = if (state == StepState.Active) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+// ── the restricted-settings walk-through ──────────────────────────────────────────
+
+/**
+ * Try the switch → App info ⋮ → switch again. When the install probably isn't restricted (a USB
+ * or store install) it starts as a single "turn it on" button, with the walk-through one tap
+ * away for when the switch turns out to be greyed out after all.
+ */
+@Composable
+private fun AccessibilityWalkthrough(
+    likelyRestricted: Boolean,
+    triedSwitch: Boolean,
+    openedAppInfo: Boolean,
+    onTrySwitch: () -> Unit,
+    onOpenAppInfo: () -> Unit,
+    onTurnOn: () -> Unit,
+) {
+    var expanded by rememberSaveable { mutableStateOf(likelyRestricted) }
+    if (!expanded) {
+        HowTo(listOf("Tap the App Blocker switch", "Tap Allow"))
+        Spacer(Modifier.height(14.dp))
+        PrimaryButton("Open the switch", onTurnOn, Modifier.fillMaxWidth())
+        Spacer(Modifier.height(4.dp))
+        TextButton(onClick = { expanded = true }) {
+            Text("Switch greyed out, or says \"Restricted setting\"?")
+        }
+        return
+    }
+
+    Text(
+        "Android blocks this switch for apps installed from a file until you allow it. It only " +
+            "lets you allow it after it has blocked you once, so the order matters:",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurface,
+    )
+    Spacer(Modifier.height(12.dp))
+    val current = when {
+        !triedSwitch -> 1
+        !openedAppInfo -> 2
+        else -> 3
+    }
+    GuideRow(
+        number = 1,
+        current = current,
+        title = "Try the switch once",
+        detail = "Tap App Blocker's switch. Android says \"Restricted setting\". Tap OK. That's " +
+            "expected, and it's what unlocks step 2.",
+        button = "Open the switch",
+        onClick = onTrySwitch,
+    )
+    GuideRow(
+        number = 2,
+        current = current,
+        title = "Allow restricted settings",
+        detail = "On App info, tap ⋮ at the top right, then \"Allow restricted settings\", then " +
+            "confirm with your PIN or fingerprint.",
+        button = "Open App info",
+        onClick = onOpenAppInfo,
+    )
+    GuideRow(
+        number = 3,
+        current = current,
+        title = "Turn the switch on",
+        detail = "Back on the switch, tap it again and tap Allow. This step ticks itself when it's on.",
+        button = "Open the switch",
+        onClick = onTurnOn,
+    )
+    Spacer(Modifier.height(8.dp))
+    Text(
+        "No ⋮ menu, or no \"Allow restricted settings\" in it? Android hasn't blocked the switch " +
+            "yet. Do step 1 again and tap the greyed-out switch itself until the message shows.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+/**
+ * One part of the walk-through. The current part is open with a filled button; done parts keep a
+ * quiet "Again" so a user who dismissed a dialog too fast can repeat it; later parts stay shut.
+ */
+@Composable
+private fun GuideRow(
+    number: Int,
+    current: Int,
+    title: String,
+    detail: String,
+    button: String,
+    onClick: () -> Unit,
+) {
+    val state = when {
+        number < current -> StepState.Done
+        number == current -> StepState.Active
+        else -> StepState.Waiting
+    }
+    Row(Modifier.padding(vertical = 6.dp)) {
+        Box(
+            Modifier
+                .size(22.dp)
+                .clip(CircleShape)
+                .background(
+                    when (state) {
+                        StepState.Done -> StatusColors.Success.copy(alpha = 0.18f)
+                        StepState.Active -> MaterialTheme.colorScheme.primaryContainer
+                        StepState.Waiting -> MaterialTheme.colorScheme.surfaceContainerHigh
+                    },
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (state == StepState.Done) {
+                Icon(Icons.Filled.Check, contentDescription = null, tint = StatusColors.Success, modifier = Modifier.size(14.dp))
+            } else {
+                Text(
+                    "$number",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (state == StepState.Active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier         = Modifier
-                        .size(40.dp)
-                        .clip(CircleShape)
-                        .background(
-                            if (step.isGranted) StatusColors.Success.copy(alpha = 0.15f)
-                            else MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
-                        ),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        step.icon,
-                        contentDescription = null,
-                        tint = if (step.isGranted) StatusColors.Success else MaterialTheme.colorScheme.primary,
-                    )
-                }
-                Spacer(Modifier.width(12.dp))
-                Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    title,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = if (state == StepState.Active) FontWeight.Bold else FontWeight.SemiBold,
+                    color = if (state == StepState.Waiting) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f),
+                )
+                if (state == StepState.Done) {
                     Text(
-                        "Step $index of $total",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        "Again",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50))
+                            .clickable(onClick = onClick)
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
                     )
-                    Text(
-                        step.title,
-                        style      = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                }
-                AnimatedContent(
-                    targetState    = step.isGranted,
-                    transitionSpec = { fadeIn(tween(300)) togetherWith fadeOut(tween(300)) },
-                    label          = "statusChip",
-                ) { granted ->
-                    StatusChip(granted)
                 }
             }
-
-            Spacer(Modifier.height(10.dp))
-
-            Text(
-                step.rationale,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-
             AnimatedVisibility(
-                visible = !step.isGranted,
-                enter   = expandVertically(tween(300)) + fadeIn(),
-                exit    = shrinkVertically(tween(300)) + fadeOut(),
+                visible = state == StepState.Active,
+                enter = expandVertically(tween(STEP_EXPAND_MS)) + fadeIn(tween(STEP_EXPAND_MS)),
+                exit = shrinkVertically(tween(STEP_EXPAND_MS)) + fadeOut(tween(STEP_EXPAND_MS / 2)),
             ) {
                 Column {
-                    if (step.blockedReason != null) {
-                        Spacer(Modifier.height(12.dp))
-                        Row {
-                            Icon(
-                                Icons.Filled.Lock,
-                                contentDescription = null,
-                                modifier = Modifier.size(14.dp),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Spacer(Modifier.width(6.dp))
-                            Text(
-                                step.blockedReason,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    } else if (step.howTo.isNotEmpty()) {
-                        Spacer(Modifier.height(12.dp))
-                        Text(
-                            "In the screen that opens:",
-                            style      = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color      = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Spacer(Modifier.height(2.dp))
-                        step.howTo.forEachIndexed { i, line ->
-                            Row(Modifier.padding(vertical = 1.dp)) {
-                                Text(
-                                    "${i + 1}.",
-                                    style    = MaterialTheme.typography.labelSmall,
-                                    color    = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.width(18.dp),
-                                )
-                                Text(
-                                    line,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
-                    }
-                    Spacer(Modifier.height(12.dp))
-                    OutlinedButton(
-                        onClick  = step.onClick,
-                        enabled  = step.blockedReason == null,
-                        modifier = Modifier.fillMaxWidth(),
-                        shape    = RoundedCornerShape(10.dp),
-                    ) {
-                        Text(step.buttonLabel, fontWeight = FontWeight.Medium)
-                    }
+                    Spacer(Modifier.height(4.dp))
+                    Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(10.dp))
+                    PrimaryButton(button, onClick, Modifier.fillMaxWidth())
                 }
             }
         }
     }
 }
 
-// ── recommended step row ───────────────────────────────────────────────────────
 @Composable
-private fun RecommendedStepRow(step: SetupStep) {
-    Card(
-        modifier  = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp)
-            .clickable(enabled = !step.isGranted, onClick = step.onClick),
-        shape     = RoundedCornerShape(14.dp),
-        colors    = CardDefaults.cardColors(
-            containerColor = if (step.isGranted) StatusColors.Success.copy(alpha = 0.06f)
-            else MaterialTheme.colorScheme.surfaceVariant,
-        ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+private fun HowTo(lines: List<String>) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        lines.forEachIndexed { index, line ->
+            Row {
+                Text(
+                    "${index + 1}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.width(18.dp),
+                )
+                Text(line, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
+            }
+        }
+    }
+}
+
+// ── optional extras ───────────────────────────────────────────────────────────
+
+private class Extra(
+    val icon: ImageVector,
+    val title: String,
+    val why: String,
+    val granted: Boolean,
+    val onClick: () -> Unit,
+)
+
+@Composable
+private fun ExtraRow(extra: Extra) {
+    Panel(
+        onClick = if (extra.granted) null else extra.onClick,
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 14.dp),
     ) {
-        Row(
-            modifier          = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(
-                step.icon,
-                contentDescription = null,
-                tint = if (step.isGranted) StatusColors.Success else MaterialTheme.colorScheme.onSurfaceVariant,
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconTile(
+                extra.icon,
+                tint = if (extra.granted) StatusColors.Success else MaterialTheme.colorScheme.onSurfaceVariant,
+                background = if (extra.granted) StatusColors.Success.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceContainerHigh,
+                size = 36.dp,
             )
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text(
-                    step.title,
-                    style      = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Text(
-                    step.rationale,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Text(extra.title, style = MaterialTheme.typography.titleSmall)
+                Text(extra.why, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            Spacer(Modifier.width(8.dp))
-            StatusChip(step.isGranted, pendingLabel = step.buttonLabel)
-        }
-    }
-}
-
-// ── status chip ────────────────────────────────────────────────────────────────
-@Composable
-private fun StatusChip(granted: Boolean, pendingLabel: String = "Pending") {
-    Surface(
-        shape = RoundedCornerShape(50),
-        color = if (granted) StatusColors.Success.copy(alpha = 0.15f)
-        else MaterialTheme.colorScheme.tertiaryContainer,
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-        ) {
-            if (granted) {
-                Icon(
-                    Icons.Filled.CheckCircle,
-                    contentDescription = null,
-                    tint = StatusColors.Success,
-                    modifier = Modifier.height(12.dp),
-                )
-                Spacer(Modifier.width(4.dp))
-            }
-            Text(
-                if (granted) "On" else pendingLabel,
-                style      = MaterialTheme.typography.labelSmall,
-                color      = if (granted) StatusColors.Success else MaterialTheme.colorScheme.onTertiaryContainer,
-                fontWeight = FontWeight.Bold,
-            )
-        }
-    }
-}
-
-// ── all-done banner ────────────────────────────────────────────────────────────
-@Composable
-private fun AllDoneBanner() {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp),
-        shape  = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = StatusColors.Success.copy(alpha = 0.1f)),
-    ) {
-        Row(
-            modifier              = Modifier.padding(16.dp),
-            verticalAlignment     = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Icon(Icons.Filled.Celebration, contentDescription = null, tint = StatusColors.Success)
-            Column {
+            Spacer(Modifier.width(10.dp))
+            if (extra.granted) {
+                StatusPill("On", StatusColors.Success)
+            } else {
                 Text(
-                    "Protection armed",
-                    style      = MaterialTheme.typography.titleSmall,
-                    color      = StatusColors.Success,
-                    fontWeight = FontWeight.Bold,
-                )
-                Text(
-                    "Locked apps will now be bounced. Use \"Remove protection\" at the top if " +
-                        "you ever need to undo this.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    "Allow",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onPrimary,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(MaterialTheme.colorScheme.primary)
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
                 )
             }
         }
@@ -758,14 +701,32 @@ private fun AllDoneBanner() {
 }
 
 // ── helpers ────────────────────────────────────────────────────────────────────
+
+/**
+ * Opens a Settings screen, or says where it is when this build doesn't have it. A missing
+ * Settings activity on some OEM ROM must not crash the setup screen (invariant 9's spirit).
+ */
+private fun openOrExplain(context: Context, intent: Intent, where: String) {
+    try {
+        context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    } catch (e: ActivityNotFoundException) {
+        Toast.makeText(context, "Open $where on this phone.", Toast.LENGTH_LONG).show()
+    }
+}
+
 private fun requestScheduleExactAlarm(context: Context) {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
-    context.startActivity(
-        Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:${context.packageName}"))
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+    openOrExplain(
+        context,
+        Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:${context.packageName}")),
+        "Settings → Apps → Special app access → Alarms & reminders",
     )
 }
 
+/**
+ * The direct request is a one-tap system dialog that sets the app to "Unrestricted" (on a Pixel,
+ * App battery usage → Unrestricted), which is far easier than finding that page by hand.
+ */
 private fun requestIgnoreBatteryOptimizations(context: Context) {
     val directIntent = Intent(
         Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
@@ -774,11 +735,12 @@ private fun requestIgnoreBatteryOptimizations(context: Context) {
     try {
         context.startActivity(directIntent)
     } catch (e: ActivityNotFoundException) {
-        // A few OEM builds don't resolve the direct per-app request — fall back to the
-        // general battery optimization list so the user can still find this app manually.
-        context.startActivity(
-            Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        // A few OEM builds don't resolve the direct per-app request. Fall back to the general
+        // battery optimisation list so the user can still find this app manually.
+        openOrExplain(
+            context,
+            Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS),
+            "Settings → Apps → App Blocker → App battery usage",
         )
     }
 }
@@ -791,23 +753,15 @@ private fun requestIgnoreBatteryOptimizations(context: Context) {
  */
 private fun openNotificationSettings(context: Context) {
     // No SDK_INT guard: ACTION_APP_NOTIFICATION_SETTINGS landed in API 26, which is this app's
-    // minSdk, so a version check here would be permanently true and its else branch dead code.
-    // App info stays as a runtime fallback because some OEM builds don't resolve this action.
+    // minSdk. App info stays as a runtime fallback because some OEM builds don't resolve it.
     val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
         .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
     try {
         context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     } catch (e: ActivityNotFoundException) {
-        context.startActivity(appInfoIntent(context).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        openOrExplain(context, RestrictedSettings.appInfoIntent(context), "Settings → Apps → App Blocker")
     }
 }
 
-private fun openAppInfo(context: Context) {
-    context.startActivity(appInfoIntent(context).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-}
-
-private fun appInfoIntent(context: Context): Intent =
-    Intent(
-        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-        Uri.parse("package:${context.packageName}"),
-    )
+private const val PROGRESS_FADE_MS = 260
+private const val STEP_EXPAND_MS = 260

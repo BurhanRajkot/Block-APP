@@ -21,10 +21,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
@@ -33,7 +31,7 @@ import com.blockapp.android.usage.AppUsage
 
 /**
  * One app in a time-spent list: icon, name, a meter against the most-used app in the same list,
- * and the time. [reels] adds an Ember reel count under the name. [onLock], when given, puts a
+ * and the time. [reels] adds a Ember reel count under the name. [onLock], when given, puts a
  * lock button on the end. That jump from "2h on YouTube" straight to locking it is the point of
  * listing apps at all.
  */
@@ -45,8 +43,7 @@ internal fun AppUsageRow(
     isLocked: Boolean = false,
     onLock: (() -> Unit)? = null,
 ) {
-    val context = LocalContext.current
-    val identity = remember(usage.packageName) { loadAppIdentity(context, usage.packageName) }
+    val identity = rememberAppIdentity(usage.packageName)
     val fraction = if (maxMillis > 0L) usage.foregroundMillis.toFloat() / maxMillis else 0f
 
     Row(

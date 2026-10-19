@@ -42,6 +42,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -53,6 +54,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -62,19 +64,19 @@ import com.blockapp.android.MainActivity
 import com.blockapp.android.ui.theme.BlockAppTheme
 import com.blockapp.android.ui.theme.Ink800
 import com.blockapp.android.ui.theme.Ink950
-import com.blockapp.android.ui.theme.Volt
-import com.blockapp.android.ui.theme.VoltDeep
+import com.blockapp.android.ui.theme.Lime
+import com.blockapp.android.ui.theme.LimeInk
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
 // ── screen-specific palette ───────────────────────────────────────────────────
-// The app's own graphite and Volt, but with nothing else on screen: it has to read as a wall
+// The app's own graphite and Lime, but with nothing else on screen: it has to read as a wall
 // the user has hit, not as another page of the app they can interact their way out of. Dark,
 // to match the dark window theme set on this activity in the manifest, so there's no flash on
 // launch.
 private val WallBackground = Ink950
-private val WallAccent     = Volt
+private val WallAccent     = Lime
 private val WallTrack      = Ink800
 
 /**
@@ -82,16 +84,35 @@ private val WallTrack      = Ink800
  * AppBlockAccessibilityService's Tier 2). It is informational only — there is deliberately no
  * control here that shortens or lifts the lock; the only ways out are waiting it out or an
  * unlock key applied from the main app.
+ *
+ * Also the "reel limit reached" wall, when [EXTRA_REEL_LIMIT] is set: the service backs out of
+ * a reel viewer once today's total hits util/ReelLimit, and shows this counting down to
+ * midnight. Same look and the same lack of a way out, but no lock behind it, so it doesn't
+ * watch activeLocks.
  */
 class BlockOverlayActivity : ComponentActivity() {
 
     companion object {
         const val EXTRA_BLOCK_UNTIL = "block_until"
         const val EXTRA_PACKAGE_NAME = "package_name"
+
+        /**
+         * Today's reel limit, for the reel wall. 0 is a real limit ("no reels"), so absence is
+         * [NOT_A_REEL_WALL], and an app lock never sets it. A reel-free-hours wall with no
+         * limit set passes a negative value together with [EXTRA_QUIET_FROM].
+         */
+        const val EXTRA_REEL_LIMIT = "reel_limit"
+
+        /** Start of the reel-free window, epoch millis, for a reel-free-hours wall. */
+        const val EXTRA_QUIET_FROM = "quiet_from"
+
+        private const val NOT_A_REEL_WALL = Int.MIN_VALUE
     }
 
     private var blockUntilState by mutableLongStateOf(0L)
     private var packageNameState by mutableStateOf("")
+    private var reelLimitState by mutableIntStateOf(NOT_A_REEL_WALL)
+    private var quietFromState by mutableLongStateOf(0L)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -109,6 +130,9 @@ class BlockOverlayActivity : ComponentActivity() {
                     BlockOverlayContent(
                         packageName = packageNameState,
                         blockUntil  = blockUntilState,
+                        reelLimit   = reelLimitState,
+                        isReelWall  = reelLimitState != NOT_A_REEL_WALL,
+                        quietFrom   = quietFromState,
                         onGoHome    = ::goHome,
                         onOpenApp   = ::openBlockApp,
                         onExpired   = ::finish,
@@ -130,6 +154,8 @@ class BlockOverlayActivity : ComponentActivity() {
     private fun readExtras(intent: Intent) {
         blockUntilState  = intent.getLongExtra(EXTRA_BLOCK_UNTIL, 0L)
         packageNameState = intent.getStringExtra(EXTRA_PACKAGE_NAME).orEmpty()
+        reelLimitState   = intent.getIntExtra(EXTRA_REEL_LIMIT, NOT_A_REEL_WALL)
+        quietFromState   = intent.getLongExtra(EXTRA_QUIET_FROM, 0L)
     }
 
     private fun goHome() {
@@ -154,6 +180,9 @@ class BlockOverlayActivity : ComponentActivity() {
 private fun BlockOverlayContent(
     packageName: String,
     blockUntil: Long,
+    reelLimit: Int,
+    isReelWall: Boolean,
+    quietFrom: Long,
     onGoHome: () -> Unit,
     onOpenApp: () -> Unit,
     onExpired: () -> Unit,
@@ -166,9 +195,18 @@ private fun BlockOverlayContent(
 
     // Only needed to draw how far through the lock the user is, so the wall renders immediately
     // without it and picks up the ring once Room answers.
+    val isReelLimit = isReelWall
+    val isQuiet = isReelWall && quietFrom > 0L
     var blockedAt by remember(packageName) { mutableStateOf<Long?>(null) }
-    LaunchedEffect(packageName) {
-        if (packageName.isNotEmpty()) {
+    LaunchedEffect(packageName, isReelLimit, quietFrom) {
+        if (isQuiet) {
+            // A reel-free window's ring runs from the window's start to its end.
+            blockedAt = quietFrom
+        } else if (isReelLimit) {
+            // The reel-limit ring shows how far through the day it is: it runs out at midnight.
+            blockedAt = java.time.LocalDate.now().atStartOfDay(java.time.ZoneId.systemDefault())
+                .toInstant().toEpochMilli()
+        } else if (packageName.isNotEmpty()) {
             blockedAt = app.repository.getActiveLock(packageName)?.blockedAt
         }
     }
@@ -201,8 +239,8 @@ private fun BlockOverlayContent(
     // front, and kicks straight here), and at that point activeLocks is still the empty initial
     // value Room's Flow hasn't replaced yet — treating that first emission as "lock gone" would
     // dismiss the wall instantly and let the locked app right back through.
-    LaunchedEffect(packageName) {
-        if (packageName.isEmpty()) return@LaunchedEffect
+    LaunchedEffect(packageName, isReelLimit) {
+        if (packageName.isEmpty() || isReelLimit) return@LaunchedEffect
         var seenActive = false
         app.repository.activeLocks.collectLatest { locks ->
             if (packageName in locks) {
@@ -258,8 +296,12 @@ private fun BlockOverlayContent(
         }
         Box(contentAlignment = Alignment.Center) {
             Canvas(Modifier.size((DIAL_SIZE_DP * 1.5f).dp)) {
+                // A thin ring that breathes, not a glow: the soft radial wash it replaced was part
+                // of what made the app look generated.
                 drawCircle(
-                    brush = Brush.radialGradient(listOf(WallAccent.copy(alpha = breath), Color.Transparent)),
+                    color = WallAccent.copy(alpha = breath),
+                    radius = size.minDimension / 2f - 2.dp.toPx(),
+                    style = Stroke(1.5.dp.toPx()),
                 )
             }
             if (elapsedFraction != null) {
@@ -308,16 +350,29 @@ private fun BlockOverlayContent(
 
         // ── what and until when ───────────────────────────────────────────
         Text(
-            identity?.let { "${it.label} is locked" } ?: "This app is locked",
+            when {
+                isQuiet -> "Reel-free hours"
+                isReelLimit && reelLimit == 0 -> "Reels are off"
+                isReelLimit -> "Reel limit reached"
+                identity != null -> "${identity.label} is locked"
+                else -> "This app is locked"
+            },
             style      = MaterialTheme.typography.headlineMedium,
             color      = Color.White,
             textAlign  = TextAlign.Center,
         )
         Spacer(Modifier.height(6.dp))
         Text(
-            if (remainingMs > 0L) "Unlocks at ${formatUnlockAt(blockUntil)}" else "Unlocking…",
+            when {
+                isQuiet -> "Reels are back at ${formatUnlockAt(blockUntil)}."
+                isReelLimit && reelLimit == 0 -> "Your plan has you reel-free today."
+                isReelLimit -> "That's your $reelLimit for today. Reels are back at midnight."
+                remainingMs > 0L -> "Unlocks at ${formatUnlockAt(blockUntil)}"
+                else -> "Unlocking…"
+            },
             style = MaterialTheme.typography.bodyLarge,
             color = Color.White.copy(alpha = 0.7f),
+            textAlign = TextAlign.Center,
         )
 
         Spacer(Modifier.height(20.dp))
@@ -329,7 +384,13 @@ private fun BlockOverlayContent(
                 .padding(horizontal = 16.dp, vertical = 12.dp),
         ) {
             Text(
-                "You set this yourself. It can't be shortened from here — wait it out.",
+                if (isQuiet) {
+                    "You chose these hours in your reel plan. The rest of the app still works; only reels are off."
+                } else if (isReelLimit) {
+                    "You set this limit yourself. The rest of the app still works; only reels are off."
+                } else {
+                    "You set this yourself. It can't be shortened from here — wait it out."
+                },
                 style     = MaterialTheme.typography.bodySmall,
                 color     = Color.White.copy(alpha = 0.6f),
                 textAlign = TextAlign.Center,
@@ -347,7 +408,7 @@ private fun BlockOverlayContent(
             shape    = RoundedCornerShape(50),
             colors   = ButtonDefaults.buttonColors(
                 containerColor = WallAccent,
-                contentColor   = VoltDeep,
+                contentColor   = LimeInk,
             ),
         ) {
             Text("Go home", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)

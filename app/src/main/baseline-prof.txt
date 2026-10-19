@@ -1,0 +1,6 @@
+# Ahead-of-time compile all of this app's own code on install (profileinstaller applies it on a
+# sideload too). The app is small, so compiling every class costs little install time, and it is
+# what removes the JIT warm-up jank from cold start, the first scroll of each screen, and the
+# accessibility service's event path. Compose's own libraries ship their profiles separately.
+HSPLcom/blockapp/android/**->**(**)**
+Lcom/blockapp/android/**;

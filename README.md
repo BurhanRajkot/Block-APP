@@ -47,11 +47,13 @@ determined bypass.
    - **Keep `keygen/keys/private_key.pem` secret.** It's the only thing that can produce a valid
      unlock key. It's already excluded via `.gitignore`.
 
-2. **Open in Android Studio** (this environment has no Android SDK/Gradle/emulator installed, so
-   building and running has to happen there): File → Open → select this folder. Studio will
-   prompt to set up the Gradle wrapper automatically on first sync — accept that.
+2. **Build and install the release build** with the phone connected over USB:
+   `./gradlew installRelease`. Use this rather than the debug build: the debug build is
+   unoptimised and noticeably laggy. The release build is signed with the local debug key, so it
+   needs no keystore and installs over a debug install without losing data.
 
-3. **Install on your phone** and, from the app's Home screen, tap "Permissions setup" to:
+3. **First launch** asks five questions about your scrolling and builds a reel plan (or skip it).
+   Then setup walks you through the permissions:
    - Enable the Accessibility Service.
    - Activate Device Admin.
    - Allow the app to ignore battery optimizations (so it doesn't get killed in the background).
@@ -67,15 +69,20 @@ reboot).
 
 The Today tab shows how many short-form videos (Reels, Shorts, TikToks, Reddit/LinkedIn video
 feeds, …) you've swiped through today, roughly how long you spent on them, and the top few apps.
-Insights has the per-app breakdown and the last 7 days. It reads screen events from the same
+History has the per-app breakdown for any day, week or month. It reads screen events from the same
 Accessibility Service, only counts, never blocks anything, and stays on the phone like
 everything else.
 
-It works on Android 9+ and has no per-app list. It recognises a reel viewer by shape: a
-full-screen vertical pager showing exactly one video at a time, which comes to rest exactly one
-screen-height per swipe. When the app also labels that pager as a pager (most do), it's
-recognised on the first video, before you swipe. Otherwise the first page-sized swipe confirms
-it. Ordinary feed scrolling ends a session instead of counting.
+It works on Android 9+ and only watches short-video apps (Instagram, YouTube, TikTok, Snapchat,
+Facebook, Reddit, LinkedIn, X, Pinterest and a few more, listed in `util/ReelApps.kt`). Browsers,
+galleries and everything else are never counted, however much their scrolling looks like reels. In
+apps that also show photos full-screen (Reddit, LinkedIn, X, Pinterest, Tumblr) a reel only counts
+while a video player is on screen. It recognises a reel viewer two ways. The
+first is the app's video pager (a full-screen page per video, as in Instagram Reels). The
+second is what every short-video viewer draws: a column of like / comment / share buttons down
+the right edge, which feeds never have. That second way is what covers YouTube Shorts, TikTok,
+Facebook and the rest. Either way it's picked up on the first video, before you swipe, and a
+new reel is spotted when the caption and username change.
 
 - Rewatching (swiping back, then forward again) doesn't count a reel twice.
 - Coming back to the same reel (from comments, the notification shade, another app) doesn't
@@ -92,10 +99,36 @@ screen, just right of the front camera, and hops each time it goes up. It disapp
 leave the viewer, switch apps, or turn the screen off. It can't be tapped, so it never gets in
 the way of the app underneath.
 
-## Screen time
+## Reel plan
 
-Insights (and the Today tab) show time per app, an hour-by-hour chart, how many times each app was
-opened, and phone unlocks, for today and the past week. This needs **Usage access** (Settings →
+The first-launch quiz asks which apps get you, how many reels and how much time a day, when it's
+hardest to stop, and what you want (cut down gently, cut down fast, or quit reels). From that it
+builds a plan: a daily limit that starts a little under your own estimate and steps down each
+week to a goal, plus optional **reel-free hours** (for example 11 PM – 7 AM) during which any reel
+viewer is closed straight away. If you watch noticeably fewer reels than planned for three days,
+the limit follows you down early. The plan never loosens on the day: stopping it, or rebuilding
+it with gentler answers, only takes effect tomorrow. Today tab → the plan strip, or Settings →
+Reel plan.
+
+## Daily reel limit
+
+Today tab → **Set a limit** on the reels card (or Settings → Daily reel limit). Pick None (no reels at
+all), 25, 50, 100, 150, 200 or a custom number. A running reel plan sets this for you each week. The bubble then reads "87/100" and turns red near the end,
+and at 10 to go you get a heads-up. When you hit it, any reel viewer you open is closed with
+Back and a "Reel limit reached" screen stays up until midnight. The rest of each app keeps
+working.
+
+Lowering the limit applies immediately. Raising it or turning it off only applies from the
+next day, so it can't be lifted on impulse.
+
+## Screen time and history
+
+The History tab shows time per app, an hour-by-hour chart, how many times each app was opened,
+phone unlocks and reels, for any day since install. Switch between Day, Week and Month, and tap any
+day on the month calendar or any bar in the week to open it. Android itself only keeps about a
+week of usage data, so the app saves each day as it goes. Android's own backup (to your Google
+account) includes that history and the reel plan, so both come back after an uninstall and
+reinstall. Running locks come back too. This needs **Usage access** (Settings →
 Special app access), which only reads how long apps were in front. Tap the lock icon on any app
 row to lock that app straight away.
 

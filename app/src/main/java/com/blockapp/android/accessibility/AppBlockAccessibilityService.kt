@@ -8,6 +8,8 @@ import android.content.IntentFilter
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
+import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.inputmethod.InputMethodManager
 import android.widget.Toast
@@ -17,12 +19,24 @@ import com.blockapp.android.R
 import com.blockapp.android.admin.DeviceAdminHelper
 import com.blockapp.android.ui.BlockOverlayActivity
 import com.blockapp.android.util.ProtectedPackages
+import com.blockapp.android.util.ReelApps
+import com.blockapp.android.util.ReelLimit
+import com.blockapp.android.util.ReelPlan
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import java.time.LocalDate
+import java.time.ZoneId
 
 /**
  * Two-tier protection:
@@ -56,7 +70,14 @@ import kotlinx.coroutines.runBlocking
  * today's total beside the camera. Both only observe and never act on the foreground app, so
  * they have no bearing on enforcement. Content-change events in particular go nowhere near
  * Tier 1 or Tier 2; they only arm the tracker's throttled scan.
+ *
+ * Tier 3 – the daily reel limit (util/ReelLimit), the one place reel tracking leads to action:
+ *   once today's total reaches the user's limit, a reel session that opens (or one that is open
+ *   when the limit is reached) is answered with GLOBAL_ACTION_BACK and the reel-limit wall. It
+ *   acts only on what ReelTracker already calls a reel viewer, which never includes this app,
+ *   launchers, or ProtectedPackages, so it can't reach the screens setup and removal depend on.
  */
+@OptIn(ExperimentalCoroutinesApi::class)
 class AppBlockAccessibilityService : AccessibilityService() {
 
     private val handler = Handler(Looper.getMainLooper())
@@ -77,6 +98,32 @@ class AppBlockAccessibilityService : AccessibilityService() {
         }
     }
     private var screenOffRegistered = false
+
+    private var reelSessionPackage: String? = null
+    private var reelTotalToday = -1
+    private var lastLimitKickAt = 0L
+    /** What the reel wall shows: today's limit, or a reel-free window ending at [until]. */
+    private class ReelWall(val packageName: String, val limit: Int, val until: Long, val quietFrom: Long?)
+
+    private var pendingLimitWall: ReelWall? = null
+
+    private val showReelLimitWall = Runnable {
+        val wall = pendingLimitWall ?: return@Runnable
+        pendingLimitWall = null
+        startActivity(
+            Intent(this, BlockOverlayActivity::class.java).apply {
+                addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                        Intent.FLAG_ACTIVITY_NO_ANIMATION,
+                )
+                putExtra(BlockOverlayActivity.EXTRA_PACKAGE_NAME, wall.packageName)
+                putExtra(BlockOverlayActivity.EXTRA_BLOCK_UNTIL, wall.until)
+                putExtra(BlockOverlayActivity.EXTRA_REEL_LIMIT, wall.limit)
+                wall.quietFrom?.let { putExtra(BlockOverlayActivity.EXTRA_QUIET_FROM, it) }
+            },
+        )
+    }
 
     /**
      * Backstop against missed events. onAccessibilityEvent only fires when the system decides
@@ -127,21 +174,30 @@ class AppBlockAccessibilityService : AccessibilityService() {
         // The tracker needs scrollDeltaY, which AccessibilityEvent only gained in API 28 (P).
         // Below that the counter simply stays at zero, and HomeScreen says why.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            val bubble = ReelBubble(this, app.repository, scope)
+            val bubble = ReelBubble(this, app.repository, scope) { ReelLimit.todayLimit(this) }
             reelBubble = bubble
             bubbleTransientPackages = bubbleTransientPackages()
             reelTracker = ReelTracker(
                 service = this,
                 handler = handler,
-                ignoredPackages = reelIgnoredPackages(),
+                // An allowlist, not a blocklist: see ReelApps.KNOWN for the browser images that
+                // were counted as reels when every app was watched.
+                trackedPackages = ReelApps.KNOWN,
                 listener = object : ReelTracker.Listener {
                     override fun onReelsWatched(packageName: String, count: Int, watchMs: Long) {
                         app.repository.addReelsWatched(packageName, count, watchMs)
                     }
 
-                    override fun onSessionStarted(packageName: String) = bubble.show(packageName)
+                    override fun onSessionStarted(packageName: String) {
+                        reelSessionPackage = packageName
+                        bubble.show(packageName)
+                        enforceReelLimit()
+                    }
 
-                    override fun onSessionEnded(packageName: String) = bubble.hide()
+                    override fun onSessionEnded(packageName: String) {
+                        reelSessionPackage = null
+                        bubble.hide()
+                    }
                 },
             )
             // Not exported: screen-off is a system broadcast, which reaches a not-exported
@@ -153,6 +209,28 @@ class AppBlockAccessibilityService : AccessibilityService() {
                 ContextCompat.RECEIVER_NOT_EXPORTED,
             )
             screenOffRegistered = true
+
+            // Today's total, re-keyed at midnight so the limit resets with the day.
+            scope.launch {
+                todayTicker()
+                    .flatMapLatest { day -> app.repository.observeReelTotal(day) }
+                    .collect { total -> onReelTotal(total) }
+            }
+            // The reel plan's next step, applied the moment the day turns, so a new week's
+            // lower limit doesn't wait for the app to be opened. The process-start and daily
+            // alarm runs cover the rest (see ReelPlan.refresh).
+            scope.launch {
+                todayTicker().collect {
+                    try {
+                        ReelPlan.refresh(this@AppBlockAccessibilityService, app.repository)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: RuntimeException) {
+                        // A plan step is not worth the service (invariant 9).
+                        Log.w("ReelPlan", "refresh failed", e)
+                    }
+                }
+            }
         }
         scope.launch {
             app.repository.activeLocks.collect { locks ->
@@ -172,6 +250,9 @@ class AppBlockAccessibilityService : AccessibilityService() {
     override fun onUnbind(intent: Intent?): Boolean {
         handler.removeCallbacks(watchdog)
         handler.removeCallbacks(showOverlay)
+        handler.removeCallbacks(showReelLimitWall)
+        reelSessionPackage = null
+        reelTotalToday = -1
         watchdogScheduled = false
         // The tracker only exists from API 28, but the field's type doesn't say so.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) reelTracker?.release()
@@ -196,7 +277,7 @@ class AppBlockAccessibilityService : AccessibilityService() {
             // Many per second while a video plays. Only the tracker's throttle sees these.
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
                 val pkg = event.packageName?.toString() ?: return
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) reelTracker?.onContentChanged(pkg)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) reelTracker?.onContentChanged(pkg, bubbleTransientPackages)
                 return
             }
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> Unit
@@ -329,6 +410,65 @@ class AppBlockAccessibilityService : AccessibilityService() {
     }
 
     /**
+     * Warns once as the total closes in on the limit, then enforces it. The first value after
+     * (re)connecting only sets the baseline, so a restart mid-evening doesn't re-announce a
+     * warning the user already saw.
+     */
+    private fun onReelTotal(total: Int) {
+        val previous = reelTotalToday
+        reelTotalToday = total
+        val limit = ReelLimit.todayLimit(this)
+        if (limit != null) {
+            val warnAt = limit - LIMIT_WARNING_REELS
+            if (previous in 0 until warnAt && total in warnAt until limit) {
+                Toast.makeText(this, "${limit - total} reels left today", Toast.LENGTH_SHORT).show()
+            }
+        }
+        // Runs with no limit too: reel-free hours apply whether or not a limit is set.
+        enforceReelLimit()
+    }
+
+    /**
+     * Tier 3: backs out of the open reel viewer and shows the reel-limit wall, if today's total
+     * has reached the limit. BACK rather than HOME so only the reel viewer is left: the app
+     * underneath (Instagram's feed, YouTube's home) stays usable, which is the promise the wall
+     * makes. The wall follows OVERLAY_DELAY_MS later for the same reason as Tier 2's.
+     */
+    private fun enforceReelLimit() {
+        val packageName = reelSessionPackage ?: return
+        // Reel-free hours (ReelPlan) close a viewer whatever today's count is. Read on every
+        // call rather than cached, so a window that starts while a session is open applies at
+        // the next counted reel.
+        val quiet = ReelPlan.quietWindowAt(this)
+        val limit = ReelLimit.todayLimit(this)
+        val wall = when {
+            quiet != null -> ReelWall(packageName, limit ?: NO_LIMIT, until = quiet.second, quietFrom = quiet.first)
+            // reelTotalToday is -1 until Room's first answer, so a 0 limit waits for it too.
+            limit != null && reelTotalToday >= 0 && reelTotalToday >= limit ->
+                ReelWall(packageName, limit, until = nextMidnight(), quietFrom = null)
+            else -> return
+        }
+        val now = SystemClock.uptimeMillis()
+        // One kick per burst: the session-start and total-changed paths often fire together.
+        if (now - lastLimitKickAt < LIMIT_KICK_COOLDOWN_MS) return
+        lastLimitKickAt = now
+        performGlobalAction(GLOBAL_ACTION_BACK)
+        handler.removeCallbacks(showReelLimitWall)
+        pendingLimitWall = wall
+        handler.postDelayed(showReelLimitWall, OVERLAY_DELAY_MS)
+    }
+
+    private fun todayTicker(): Flow<LocalDate> = flow {
+        while (true) {
+            emit(LocalDate.now())
+            delay(DAY_CHECK_MS)
+        }
+    }.distinctUntilChanged()
+
+    private fun nextMidnight(): Long =
+        LocalDate.now().plusDays(1).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+
+    /**
      * Windows that open on top of the reel viewer without the user leaving it: the
      * notification shade and the keyboard (typing a comment). Hiding for those would make
      * the bubble flicker away every time either appears.
@@ -339,19 +479,6 @@ class AppBlockAccessibilityService : AccessibilityService() {
             ?.map { it.packageName }
             .orEmpty()
         return keyboards.toSet() + SYSTEM_UI_PACKAGE
-    }
-
-    /**
-     * Packages whose full-screen scrollers are never reels. The launcher's home pages and app
-     * drawer fill the screen and snap, so they would otherwise look like a pager. System UI is the
-     * notification shade. This app and the protected system packages are excluded as well, since
-     * nothing in them is short-form video.
-     */
-    private fun reelIgnoredPackages(): Set<String> {
-        val home = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
-        val launchers = packageManager.queryIntentActivities(home, 0)
-            .map { it.activityInfo.packageName }
-        return launchers.toSet() + ProtectedPackages.ALL + packageName + SYSTEM_UI_PACKAGE
     }
 
     override fun onInterrupt() {}
@@ -366,6 +493,18 @@ class AppBlockAccessibilityService : AccessibilityService() {
          * wall reads as the cause of the bounce rather than a separate event.
          */
         const val OVERLAY_DELAY_MS = 350L
+
+        /** EXTRA_REEL_LIMIT for a reel-free-hours wall with no daily limit set. */
+        const val NO_LIMIT = -1
+
+        /** How many reels before the limit the "N reels left" warning appears. */
+        const val LIMIT_WARNING_REELS = 10
+
+        /** Minimum spacing between reel-limit kicks; see enforceReelLimit. */
+        const val LIMIT_KICK_COOLDOWN_MS = 1_500L
+
+        /** How often the day is re-checked so today's reel total resets at midnight. */
+        const val DAY_CHECK_MS = 60_000L
 
         const val SYSTEM_UI_PACKAGE = "com.android.systemui"
 

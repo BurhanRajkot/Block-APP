@@ -1,6 +1,18 @@
 package com.blockapp.android.ui
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.offset
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.LocalIndication
@@ -57,13 +69,22 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import com.blockapp.android.ui.theme.FogFaint
+import com.blockapp.android.ui.theme.Ember
+import com.blockapp.android.ui.theme.Lime
+import com.blockapp.android.ui.theme.BoneFaint
+import com.blockapp.android.ui.theme.Ink950
+import java.time.LocalDate
+import java.time.YearMonth
 
 // The handful of building blocks every screen is assembled from. Keeping them here is what
 // keeps the screens consistent with each other: one card radius, one header, one button height.
 
 internal val ScreenPadding = 20.dp
-internal val PanelShape = RoundedCornerShape(24.dp)
+/**
+ * 20dp, down from 28. The very round cards were half of the soft, generated look; this keeps
+ * them friendly without every panel reading as a pill.
+ */
+internal val PanelShape = RoundedCornerShape(20.dp)
 
 /** The card everything sits on. Clickable only when [onClick] is given. */
 @Composable
@@ -85,6 +106,7 @@ internal fun Panel(
             }
             .clip(PanelShape)
             .background(color)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f), PanelShape)
             .then(
                 if (onClick != null) {
                     Modifier.clickable(interaction, LocalIndication.current, onClick = onClick)
@@ -186,7 +208,7 @@ internal fun ScreenHeader(
     }
 }
 
-/** The one filled button style: full width, pill, 56dp. Volt unless a [color] is given. */
+/** The one filled button style: full width, pill, 56dp. Lime unless a [color] is given. */
 @Composable
 internal fun PrimaryButton(
     text: String,
@@ -218,7 +240,7 @@ internal fun PrimaryButton(
             containerColor = color,
             contentColor = contentColor,
             disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-            disabledContentColor = FogFaint,
+            disabledContentColor = BoneFaint,
         ),
         contentPadding = PaddingValues(horizontal = 20.dp),
     ) {
@@ -500,3 +522,319 @@ private const val BAR_FILL = 0.62f
 /** One bar's grow time, and the total spread of start times across a chart. */
 private const val BAR_GROW_MS = 650
 private const val BAR_STAGGER_MS = 420
+
+/**
+ * Stand-in rows for a list that is still loading off the main thread (rememberLaunchableApps).
+ * Static on purpose: a shimmer would be an animation that runs for as long as the load does,
+ * and see the Motion.kt rule on what looping animations cost here.
+ */
+@Composable
+internal fun LoadingRows(count: Int = 8, modifier: Modifier = Modifier) {
+    val block = MaterialTheme.colorScheme.surfaceContainerHigh
+    Column(modifier.padding(horizontal = 20.dp, vertical = 8.dp)) {
+        repeat(count) { index ->
+            Row(Modifier.padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    Modifier
+                        .size(44.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(block),
+                )
+                Spacer(Modifier.width(14.dp))
+                Box(
+                    Modifier
+                        .fillMaxWidth(if (index % 2 == 0) 0.55f else 0.4f)
+                        .height(14.dp)
+                        .clip(RoundedCornerShape(50))
+                        .background(block),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * The hero ring: [fraction] of a circle in Lime over a faint track, with
+ * [content] centred inside. Past 1 the ring is simply full and turns solid Ember, since "over the
+ * limit" should read as a different state, not a slightly longer arc.
+ */
+@Composable
+internal fun ProgressRing(
+    fraction: Float,
+    modifier: Modifier = Modifier,
+    size: Dp = 168.dp,
+    stroke: Dp = 14.dp,
+    content: @Composable () -> Unit,
+) {
+    val animated by animateFloatAsState(
+        if (rememberAppeared()) fraction.coerceIn(0f, 1f) else 0f,
+        tween(RING_GROW_MS, easing = FastOutSlowInEasing),
+        label = "ring",
+    )
+    val over = fraction >= 1f
+    val track = MaterialTheme.colorScheme.surfaceContainerHigh
+    val accent = MaterialTheme.colorScheme.primary
+    Box(modifier.size(size), contentAlignment = Alignment.Center) {
+        Canvas(Modifier.fillMaxSize()) {
+            val width = stroke.toPx()
+            val inset = width / 2f
+            val arcSize = Size(this.size.width - width, this.size.height - width)
+            drawArc(
+                color = track,
+                startAngle = 0f,
+                sweepAngle = 360f,
+                useCenter = false,
+                topLeft = Offset(inset, inset),
+                size = arcSize,
+                style = Stroke(width),
+            )
+            if (animated > 0f) {
+                rotate(-90f) {
+                    drawArc(
+                        color = if (over) Ember else accent,
+                        startAngle = 0f,
+                        sweepAngle = 360f * animated,
+                        useCenter = false,
+                        topLeft = Offset(inset, inset),
+                        size = arcSize,
+                        style = Stroke(width, cap = StrokeCap.Round),
+                    )
+                }
+            }
+        }
+        content()
+    }
+}
+
+/** A pill switch between [options]. The selected pill slides rather than jumps. */
+@Composable
+internal fun <T> SegmentedToggle(
+    options: List<T>,
+    selected: T,
+    label: (T) -> String,
+    onSelect: (T) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val index = options.indexOf(selected).coerceAtLeast(0)
+    BoxWithConstraints(
+        modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(50))
+            .background(MaterialTheme.colorScheme.surfaceContainer)
+            .padding(4.dp),
+    ) {
+        val optionWidth = maxWidth / options.size
+        val offset by animateDpAsState(
+            optionWidth * index,
+            spring(dampingRatio = 0.75f, stiffness = Spring.StiffnessMediumLow),
+            label = "segment",
+        )
+        Box(
+            Modifier
+                .offset(x = offset)
+                .width(optionWidth)
+                .height(40.dp)
+                .clip(RoundedCornerShape(50))
+                .background(MaterialTheme.colorScheme.primary),
+        )
+        Row {
+            options.forEach { option ->
+                val isSelected = option == selected
+                Box(
+                    Modifier
+                        .width(optionWidth)
+                        .height(40.dp)
+                        .clip(RoundedCornerShape(50))
+                        .clickable { onSelect(option) },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        label(option),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = if (isSelected) {
+                            MaterialTheme.colorScheme.onPrimary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** One answer in the quiz: a full-width card that fills with Lime when chosen. */
+@Composable
+internal fun ChoiceCard(
+    title: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    subtitle: String? = null,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val scale = rememberPressScale(interaction, pressedScale = 0.97f)
+    val haptics = LocalHapticFeedback.current
+    val shape = RoundedCornerShape(16.dp)
+    // The fill and edge fade between states rather than snapping, so a tap reads as the card
+    // being chosen, not the screen redrawing.
+    val fill by animateColorAsState(
+        if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer,
+        tween(CHOICE_FADE_MS),
+        label = "choiceFill",
+    )
+    val edge by animateColorAsState(
+        if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+        tween(CHOICE_FADE_MS),
+        label = "choiceEdge",
+    )
+    Row(
+        modifier
+            .fillMaxWidth()
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+            }
+            .clip(shape)
+            .background(fill)
+            .border(if (selected) 1.5.dp else 1.dp, edge, shape)
+            .clickable(interaction, LocalIndication.current) {
+                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                onClick()
+            }
+            .padding(horizontal = 18.dp, vertical = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            if (subtitle != null) {
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Spacer(Modifier.width(12.dp))
+        Box(
+            Modifier
+                .size(22.dp)
+                .clip(CircleShape)
+                .background(if (selected) MaterialTheme.colorScheme.primary else Color.Transparent)
+                .border(
+                    2.dp,
+                    if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                    CircleShape,
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (selected) {
+                Icon(
+                    Icons.Filled.Check,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onPrimary,
+                    modifier = Modifier.size(14.dp),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * A month as a heat map: one rounded cell per day, tinted by [valueOf] against the month's
+ * busiest day in [color]. Days outside [enabled] (before install, after today) are drawn faint
+ * and can't be tapped. Weeks start on Monday.
+ */
+@Composable
+internal fun HeatCalendar(
+    month: YearMonth,
+    valueOf: (LocalDate) -> Long,
+    color: Color,
+    selected: LocalDate?,
+    enabled: (LocalDate) -> Boolean,
+    onSelect: (LocalDate) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val first = month.atDay(1)
+    val leading = first.dayOfWeek.value - 1
+    val days = month.lengthOfMonth()
+    val max = (1..days).maxOf { valueOf(month.atDay(it)) }.coerceAtLeast(1L)
+    val today = LocalDate.now()
+    val empty = MaterialTheme.colorScheme.surfaceContainerHigh
+    Column(modifier.fillMaxWidth()) {
+        Row(Modifier.fillMaxWidth()) {
+            listOf("M", "T", "W", "T", "F", "S", "S").forEach {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        val cells = leading + days
+        val rows = (cells + 6) / 7
+        for (row in 0 until rows) {
+            Row(Modifier.fillMaxWidth()) {
+                for (column in 0 until 7) {
+                    val dayNumber = row * 7 + column - leading + 1
+                    Box(
+                        Modifier
+                            .weight(1f)
+                            .aspectRatio(1f)
+                            .padding(3.dp),
+                    ) {
+                        if (dayNumber in 1..days) {
+                            val day = month.atDay(dayNumber)
+                            val isEnabled = enabled(day)
+                            val value = if (isEnabled) valueOf(day) else 0L
+                            val share = value.toFloat() / max
+                            val fill = when {
+                                !isEnabled -> Color.Transparent
+                                value <= 0L -> empty
+                                else -> color.copy(alpha = 0.22f + 0.78f * share)
+                            }
+                            val isSelected = day == selected
+                            Box(
+                                Modifier
+                                    .fillMaxSize()
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(fill)
+                                    .then(
+                                        if (isSelected) {
+                                            Modifier.border(2.dp, MaterialTheme.colorScheme.onSurface, RoundedCornerShape(10.dp))
+                                        } else if (day == today) {
+                                            Modifier.border(1.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(10.dp))
+                                        } else {
+                                            Modifier
+                                        },
+                                    )
+                                    .then(if (isEnabled) Modifier.clickable { onSelect(day) } else Modifier),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    "$dayNumber",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = when {
+                                        !isEnabled -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
+                                        share > 0.55f -> Ink950
+                                        else -> MaterialTheme.colorScheme.onSurface
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** How long a [ChoiceCard] takes to fill when chosen. */
+private const val CHOICE_FADE_MS = 180
+
+/** One full sweep of a [ProgressRing] on arrival. */
+private const val RING_GROW_MS = 1_000

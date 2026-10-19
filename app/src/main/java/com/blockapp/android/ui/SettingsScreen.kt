@@ -35,6 +35,8 @@ import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material.icons.outlined.Extension
+import androidx.compose.material.icons.outlined.HourglassBottom
+import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.Insights
 import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material3.HorizontalDivider
@@ -59,6 +61,8 @@ import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.blockapp.android.admin.DeviceAdminHelper
 import com.blockapp.android.ui.theme.StatusColors
 import com.blockapp.android.usage.UsageStatsProvider
+import com.blockapp.android.util.ReelLimit
+import com.blockapp.android.util.ReelPlan
 
 /**
  * The app's one hub for everything that isn't "lock an app": protection status, setup, screen
@@ -74,7 +78,8 @@ import com.blockapp.android.usage.UsageStatsProvider
 @Composable
 fun SettingsScreen(
     onPermissions: () -> Unit,
-    onInsights: () -> Unit,
+    onHistory: () -> Unit,
+    onPlan: () -> Unit,
     onEnterKey: () -> Unit,
     onRemoveProtection: () -> Unit,
 ) {
@@ -88,6 +93,10 @@ fun SettingsScreen(
     var hasUsageAccess         by remember { mutableStateOf(false) }
     var showInstallNotes       by remember { mutableStateOf(false) }
     var versionTaps            by remember { mutableStateOf(0) }
+    var reelLimit              by remember { mutableStateOf(ReelLimit.todayLimit(context)) }
+    var reelLimitPending       by remember { mutableStateOf(ReelLimit.pending(context)) }
+    var editingReelLimit       by remember { mutableStateOf(false) }
+    var reelPlan               by remember { mutableStateOf(ReelPlan.current(context)) }
 
     // Every one of these can be revoked while the app sits in the background, so they're re-read
     // on resume rather than sampled once — same reason HomeScreen re-checks its banner state.
@@ -98,6 +107,9 @@ fun SettingsScreen(
         canScheduleExactAlarms = DeviceAdminHelper.canScheduleExactAlarms(context)
         hasNotifications       = DeviceAdminHelper.areNotificationsEnabled(context)
         hasUsageAccess         = UsageStatsProvider.hasUsageAccess(context)
+        reelLimit              = ReelLimit.todayLimit(context)
+        reelLimitPending       = ReelLimit.pending(context)
+        reelPlan               = ReelPlan.current(context)
         onPauseOrDispose {}
     }
 
@@ -115,6 +127,17 @@ fun SettingsScreen(
         if (versionTaps == 0) return@LaunchedEffect
         kotlinx.coroutines.delay(2_000L)
         versionTaps = 0
+    }
+
+    if (editingReelLimit) {
+        ReelLimitDialog(
+            onDismiss = { editingReelLimit = false },
+            onDone = {
+                editingReelLimit = false
+                reelLimit = ReelLimit.todayLimit(context)
+                reelLimitPending = ReelLimit.pending(context)
+            },
+        )
     }
 
     Column(
@@ -140,13 +163,37 @@ fun SettingsScreen(
         SettingsSection("Tools") {
             SettingsRow(
                 icon      = Icons.Outlined.Insights,
-                title     = "Screen time & reels",
+                title     = "Reel plan",
+                subtitle  = reelPlan?.let { "Week ${it.weekOf(java.time.LocalDate.now()) + 1} of ${it.weeks} · ${it.goal.title}" }
+                    ?: "Build a limit that steps down week by week",
+                onClick   = onPlan,
+            )
+            RowDivider()
+            SettingsRow(
+                icon      = Icons.Outlined.CalendarMonth,
+                title     = "History",
                 subtitle  = if (hasUsageAccess) {
-                    "Day and week breakdowns per app"
+                    "Any day, week or month since install"
                 } else {
                     "Reels only until usage access is on"
                 },
-                onClick   = onInsights,
+                onClick   = onHistory,
+            )
+            RowDivider()
+            SettingsRow(
+                icon     = Icons.Outlined.HourglassBottom,
+                title    = "Daily reel limit",
+                subtitle = buildString {
+                    append(
+                        when (reelLimit) {
+                            null -> "Off"
+                            0 -> "No reels"
+                            else -> "$reelLimit reels a day"
+                        },
+                    )
+                    reelLimitPending?.let { append(" · tomorrow: ${it.limit?.toString() ?: "off"}") }
+                },
+                onClick  = { editingReelLimit = true },
             )
             RowDivider()
             SettingsRow(

@@ -30,16 +30,25 @@ verification), `service/` (keep-alive foreground service), `ui/` (Compose screen
 
 The SDK is installed (`local.properties` → `~/Android/Sdk`, platform android-34) and the Gradle
 wrapper works from the command line, so a change can and should be compile-checked here before
-being called done. Running on a device still happens via Android Studio or `installDebug`.
+being called done. Running on a device still happens via Android Studio or `installRelease`.
 
 ```bash
 ./gradlew assembleDebug        # build debug APK
-./gradlew installDebug         # build + install on connected device
+./gradlew installRelease       # build + install the fast build on a connected device
+./gradlew installDebug         # debug build, for the debugger only
 ./gradlew lintDebug            # Android Lint → app/build/reports/lint-results-debug.sarif
 ./gradlew clean                # clear build outputs
 ```
 
 A compile is *not* a verification of behaviour on this app — see "Verifying a change" below.
+
+**Put the release build on the phone, not the debug one.** A debuggable build runs Compose with no
+ahead-of-time compilation and no R8, and that was most of why the app felt laggy on a Pixel. The
+release type is minified, resource-shrunk (about 1.4MB against 21MB for debug), signed with the
+local debug key so it needs no keystore, and ships `src/main/baseline-prof.txt`, which
+`profileinstaller` applies on a sideload. Debug and release share a signature, so either installs
+over the other without losing data. Log calls are kept in release on purpose: the reel counter
+is debugged with `adb logcat -s ReelTracker` on the build that's actually installed.
 
 **KSP is pinned to the KSP1 backend** (`ksp.useKSP2=false` in `gradle.properties`, KSP
 `2.2.10-2.0.2` in the root `build.gradle.kts`). Room 2.6.1's processor crashes under KSP2 with
@@ -110,7 +119,16 @@ user out of the Device Admin activation screen and make setup impossible to comp
 **Reel counter (observe-only).** The same service also receives `typeViewScrolled` and
 `typeWindowContentChanged` and hands them to `ReelTracker`, which counts short-form videos (and
 the time spent on them) per app per day into `reel_counts` for `HomeScreen` and
-`InsightsScreen`. It has no per-app list, and it uses two independent signals because neither
+`HistoryScreen`. **It only watches the apps in `util/ReelApps.KNOWN`**: the tracker and swipe
+detector drop every other package before doing anything. It used to watch every app on screen
+shape alone, and browsing images in Chrome counted as reels, because a full-screen viewer that
+snaps one item at a time *is* the reel shape. Don't widen it back to a blocklist. In
+`ReelApps.NEEDS_VIDEO_EVIDENCE` (Reddit, LinkedIn, X, Pinterest, Tumblr: photos and videos share
+viewers) a scanner match also needs a video player on screen (`ReelScreenScanner.VideoCheck`:
+ExoPlayer `exo_` IDs, player/video view classes, a seek bar, mute/pause/play labels, never
+caption text). A swipe alone never opens a session: it needs a recent scanner candidate, or
+pager semantics or a single visible item plus a second snapped swipe, and in evidence apps only a
+candidate. Within the tracked apps it uses three independent signals, because no one of them
 works in every app:
 
 - `ReelScreenScanner` walks the active window (throttled to about once every 800ms, on a
@@ -123,9 +141,25 @@ works in every app:
   as −7px on an emulator), and drops semantics-free page containers from the tree, so a Compose
   pager is recognised by its page up/down actions alone. Returning to a reel is recognised by
   the page's visible text, because Compose rebuilds the node when a page comes back.
+- The **action rail**, `ReelScreenScanner.RailScan`, is the fallback when no pager is
+  recognisable, which on a real phone was YouTube Shorts and everything else except Instagram.
+  It looks for a column of small buttons down the right edge, at least two of them labelled
+  with a reaction word or a count ("Like", "12K"), over a full-screen backdrop. Feeds put those
+  actions in a row, never a right-hand column. The column must name **at least two different
+  reactions** and sit in one compact cluster: a comments list has a "Like" heart down the right
+  of every comment, and a regular post's comments screen used to count as reels, one more per
+  scroll. A rail has no page node, so a new reel is told apart by the words in the caption zone
+  (bottom-left, above the nav bar), minus chrome words ("Follow", "Original audio"), compared
+  by overlap with the *smaller* set, **and** by the rail's own counts changing. Caption text
+  alone changed under auto-captions and an expanded "…more", and each change counted a reel.
+  A scanner-seen page change only counts if that page is still on screen when the grace ends.
 - `ReelScrollDetector` measures swipes. A burst that lands exactly on whole container heights is
-  a pager. One that doesn't is a feed, which ends the session. That confirms viewers the scanner
-  wasn't sure about, and counts by furthest position so rewatching doesn't double-count.
+  a pager. One that doesn't is a feed. Inside a session it takes two such swipes in a row to end
+  it: ending on one hid the pill mid-reel and the 30s feed cooldown stopped counting. That
+  confirms viewers the scanner wasn't sure about, and counts by furthest position so rewatching
+  doesn't double-count. Another app drawing while a session is open triggers a scan that ends
+  the session if that app is really in front, so a dropped window event can't leave the pill
+  over the launcher.
 
 Two service-config flags exist only for this, and removing either silently breaks counting:
 `flagIncludeNotImportantViews`, because the system drops scroll events from views marked
@@ -133,11 +167,35 @@ not important unless asked, and many pagers are; and `flagReportViewIds` for the
 `SurfaceView`/`TextureView` report as plain `android.view.View`, so "is a video playing" can't
 be detected by class name. Don't try.
 
-It never acts on the foreground app and must stay that way. Content-change events must never
-reach Tier 1/2, only the tracker's throttle. An exception from it must not reach the service
-(see `BlockRepository.addReelsWatched` and the guards in `ReelTracker`). Requires API 28
-(`scrollDeltaY`). Every decision is logged under `adb logcat -s ReelTracker` for on-device
-debugging.
+All reel geometry is measured against the **real display size** (`ReelTracker.realScreenSize`),
+not `resources.displayMetrics`, which leaves out the system bars while node bounds include them.
+Against the smaller height the caption zone missed the caption, and every reel read as the
+same one.
+
+The tracker never acts on the foreground app. The one action reel tracking leads to is **Tier 3**
+in `AppBlockAccessibilityService.enforceReelLimit`: an open reel session gets
+`GLOBAL_ACTION_BACK` plus the reel wall (`BlockOverlayActivity` with `EXTRA_REEL_LIMIT`) when
+today's total has reached the **daily reel limit** (`util/ReelLimit`), or at any count during
+the plan's **reel-free hours** (`EXTRA_QUIET_FROM` set). It only fires on sessions, which never
+exist for this app, launchers or `ProtectedPackages`. Lowering the limit applies now; raising or
+removing it is pending until tomorrow, the same "only ever tighten" rule as invariant 4. A limit
+of **0 is real** ("no reels", where the quit plan ends). Only `null`/`OFF` means no limit, so
+never test a limit with `> 0`, and `EXTRA_REEL_LIMIT`'s "absent" value is `Int.MIN_VALUE`, not 0.
+Content-change events must never reach Tier 1/2, only the tracker's throttle. An exception from it
+must not reach the service (see `BlockRepository.addReelsWatched` and the guards in `ReelTracker`).
+Requires API 28 (`scrollDeltaY`). Every decision is logged under `adb logcat -s ReelTracker` for
+on-device debugging.
+
+**The reel plan** (`util/ReelPlan`) is what the onboarding quiz (`QuizScreen`, shown once on
+first launch, `ReelPlan.quizSeen`) builds: a weekly step-down from just under the user's own
+estimate to a goal, plus optional reel-free hours. `ReelPlan.build` is pure. `ReelPlan.refresh`
+writes the day's step into `ReelLimit`, and only ever lowers it. It follows the user down early
+once three complete days average well under the schedule (`limitFor`). It runs on process
+start (deferred 4s), on Home resume, from the daily `UsageArchiveReceiver` alarm, and at
+midnight from the service. Stopping the plan and narrowing reel-free hours, including by
+retaking the quiz, take effect *tomorrow*. Otherwise "retake the quiz with gentler answers"
+would be an in-app off switch. The plan lives in SharedPreferences (`reel_plan`), like
+`ReelLimit`.
 
 `ReelBubble` is its on-screen half: a tiny `TYPE_ACCESSIBILITY_OVERLAY` pill beside the camera
 cutout showing today's total. It is shown for exactly as long as the tracker has a session open.
@@ -146,6 +204,21 @@ comes to the front, and on screen-off (a receiver in the service), so the pill n
 the lock screen. It needs no `SYSTEM_ALERT_WINDOW`, but only through the service's own
 `WindowManager`, and it must stay `FLAG_NOT_TOUCHABLE` because it sits over other apps' top
 bars. Its WindowManager calls are guarded for the same reason as the tracker.
+
+**History survives the system's week and a reinstall.** The system keeps raw usage events for
+about a week, so `usage/UsageArchive` copies each day into Room (`usage_days`, `usage_apps`,
+schema v4). It runs on process start, from the daily inexact `UsageArchiveReceiver` alarm
+(`AlarmScheduler.scheduleDailyArchive`, re-armed on boot and on every start), whenever History
+opens, and on each of Home's minute refreshes. `BlockRepository.archiveUsage` never writes an
+empty day, and never replaces a day with a smaller one: an old day replays as empty or short,
+and either would erase what the archive had. `HistoryScreen` reads *only* Room, back to the
+earlier of the install date and the first archived day. **Auto Backup is on**
+(`res/xml/backup_rules.xml` / `data_extraction_rules.xml`: database and shared prefs), so a
+reinstall brings back history, the plan, running locks and used nonces. Locks and nonces coming
+back is deliberate. Uninstalling is not a way out of a lock, and a spent key stays spent. A
+restored lock has no alarm, which is why `BlockApplication` re-arms every running lock's alarm on
+start. That also covers a force-stop, which cancels them. The backup goes through the system's
+backup service. The app still has no network permission (invariant 8).
 
 **Screen time** (`usage/UsageStatsProvider.history`) replays the raw `queryEvents` resume/pause
 stream rather than reading `queryUsageStats` buckets. The buckets overlap the requested range,
@@ -214,7 +287,7 @@ Ordered by how bad it is to get wrong. The first one can force a factory reset.
    can start and stop the service faster than Android's start-up handshake completes, which kills
    the whole process with `ForegroundServiceDidNotStartInTimeException`. This was hit in practice
    at cold start when a stale expired lock flipped the flow non-empty→empty within milliseconds.
-7. **A Room schema change needs a version bump and a migration.** `AppDatabase` is `version = 3`
+7. **A Room schema change needs a version bump and a migration.** `AppDatabase` is `version = 4`
    with `exportSchema = false` and **no** `fallbackToDestructiveMigration()`, so shipping a changed
    schema without a migration throws at open — and on this app, a DB that won't open means
    `activeLocks` never populates and enforcement silently stops. Migrations are hand-written SQL;
@@ -249,12 +322,32 @@ holding one: `DeviceAdminHelper`, `AlarmScheduler`, `KeyVerifier`, `ProtectedPac
 `InstalledAppsProvider`, `UsageStatsProvider`. Don't add a class with an injected `Context` for
 this kind of helper.
 
-**UI look.** Dark-only on purpose (`ui/theme/Color.kt`): graphite surfaces, Volt (`primary`) for
-anything the user does, Ember (`tertiary`) for the reel counter only. Screens are assembled from
-`ui/UiKit.kt` (`Panel`, `ScreenHeader`, `PrimaryButton`, `BarChart`, …), so reach for those before
-styling a Material component by hand. Charts are drawn with `Canvas`; no chart library.
-`RemoveProtectionScreen`, `OnboardingScreen` and `UnlockKeyScreen` deliberately only pick up the
-theme, so their structure (invariant 1) isn't touched by visual work.
+**UI look.** Dark-only on purpose (`ui/theme/Color.kt`): neutral graphite surfaces (`Ink*`),
+text in `Bone*`, Lime (`primary`, with `LimeInk` on it) for anything the user does, and Ember
+orange (`tertiary`) for the reel counter only. **No gradients and no glows**: the indigo and
+violet-to-coral look before this one read as generated, so emphasis comes from size and weight.
+Screens are assembled from `ui/UiKit.kt` (`Panel`, `ScreenHeader`,
+`PrimaryButton`, `BarChart`, `ProgressRing`, `SegmentedToggle`, `ChoiceCard`, `HeatCalendar`,
+`LoadingRows`, …), so reach for those before styling a Material component by hand. Charts are
+drawn with `Canvas`; no chart library. Illustrations are static `Canvas` drawings in `ui/Art.kt`,
+not image files. The launcher icon is a vector adaptive icon with its own cut-out monochrome layer.
+
+**Never touch PackageManager during composition.** App lists load through `rememberLaunchableApps`
+and icons through `rememberAppIdentity` (`ui/AppIdentity.kt`), both off the main thread and
+cached. `InstalledAppsProvider.label` memoises labels, because resolving one loads that app's
+resources. Calling `listLaunchableApps` inside `remember {}` froze the picker for most of a
+second. And nothing at the top level of a screen may change every second: Home's countdowns tick
+inside each `LockCard`, because a ticker read at the top recomposed the whole screen once a second.
+`RemoveProtectionScreen` and `UnlockKeyScreen` deliberately only pick up the theme, so their
+structure (invariant 1) isn't touched by visual work. `OnboardingScreen` was rebuilt on the kit
+(one required step open at a time) but keeps "Remove protection" in its header in every state.
+
+**The restricted-settings walk-through** (`admin/RestrictedSettings`, Android 13+). On a
+sideloaded install Android greys out the Accessibility switch, and App info's ⋮ → "Allow
+restricted settings" item **only appears after the switch has been tried once** and the
+"Restricted setting" dialog shown. Onboarding walks it in that order: try the switch, App info,
+switch again. Whether the app is restricted can't be read (system-only API), so
+`likelyRestricted` guesses from `InstallSourceInfo.packageSource` and only picks wording.
 
 **Motion** lives in `ui/Motion.kt` (`Reveal`, `AnimatedCount`, `RollingText`, `PulsingDot`) and
 `LockedCelebration.kt`. One hard rule: **anything that animates forever must be drawn in a
@@ -296,12 +389,14 @@ multi-line argument lists, explicit imports (no wildcards).
 ## Dependencies
 
 Deliberately minimal: Compose BOM + Material3, `core-ktx`, lifecycle (incl.
-`lifecycle-runtime-compose` for `LifecycleResumeEffect`), `activity-compose`, Room + KSP. Nothing
+`lifecycle-runtime-compose` for `LifecycleResumeEffect`), `activity-compose`, Room + KSP, and
+`profileinstaller` (applies the baseline profile on a sideload). Nothing
 else, and no version catalog — versions are literals in `app/build.gradle.kts`, with plugin
 versions in the root `build.gradle.kts`.
 
 Don't add without a real need: any DI framework (Hilt/Koin) — `BlockApplication` is the wiring;
-Navigation-Compose — the `sealed class` + `when` (three bottom-bar tabs plus five sub-screens) is
+Navigation-Compose — the `sealed class` + `when` (three bottom-bar tabs, Today/History/Settings,
+plus seven sub-screens) is
 sufficient; WorkManager —
 `AlarmManager` already covers expiry and exact timing matters; any networking, analytics, or crash
 library — see invariant 8; LiveData or RxJava — the codebase is coroutines/Flow throughout.
@@ -343,6 +438,12 @@ than an emulator. Worth walking through for enforcement changes:
 - Confirm `RemoveProtectionScreen` still deactivates admin and returns control.
 - Apply an unlock key, then apply the same key again — the second attempt must be rejected as
   already used.
+- Upgrade over a v3 install (not a fresh one): the DB must open, locks and reel counts intact.
+- With reel-free hours covering now, open a reel viewer: BACK plus the "Reel-free hours" wall.
+  With the limit at 0 ("No reels"), the first reel should do the same.
+- Retake the quiz with gentler answers: today's limit and reel-free hours must not loosen.
+- Uninstall and reinstall after a backup (`adb shell bmgr backupnow com.blockapp.android`): History,
+  the plan and running locks should all come back.
 
 ## Threat model
 

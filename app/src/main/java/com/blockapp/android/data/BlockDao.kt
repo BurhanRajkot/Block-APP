@@ -53,4 +53,53 @@ interface BlockDao {
             "WHERE day = :day AND packageName = :packageName",
     )
     suspend fun incrementReelCount(day: String, packageName: String, count: Int, watchMs: Long)
+
+    @Query(
+        "SELECT day, SUM(reels) AS reels, SUM(watchMs) AS watchMs FROM reel_counts " +
+            "WHERE day BETWEEN :fromDay AND :toDay GROUP BY day ORDER BY day ASC",
+    )
+    fun observeReelDays(fromDay: String, toDay: String): Flow<List<ReelDayTotal>>
+
+    @Query(
+        "SELECT day, SUM(reels) AS reels, SUM(watchMs) AS watchMs FROM reel_counts " +
+            "WHERE day BETWEEN :fromDay AND :toDay GROUP BY day ORDER BY day ASC",
+    )
+    suspend fun reelDaysOnce(fromDay: String, toDay: String): List<ReelDayTotal>
+
+    @Query(
+        "SELECT packageName, SUM(reels) AS reels, SUM(watchMs) AS watchMs FROM reel_counts " +
+            "WHERE day BETWEEN :fromDay AND :toDay GROUP BY packageName ORDER BY reels DESC",
+    )
+    fun observeReelApps(fromDay: String, toDay: String): Flow<List<ReelAppTotal>>
+
+    // ── usage archive (schema v4) ───────────────────────────────────────────────────────────
+
+    @Query("SELECT * FROM usage_days WHERE day = :day")
+    suspend fun usageDay(day: String): UsageDayEntity?
+
+    @Query("SELECT * FROM usage_days WHERE day BETWEEN :fromDay AND :toDay ORDER BY day ASC")
+    fun observeUsageDays(fromDay: String, toDay: String): Flow<List<UsageDayEntity>>
+
+    @Query("SELECT * FROM usage_apps WHERE day = :day ORDER BY foregroundMs DESC")
+    fun observeUsageApps(day: String): Flow<List<UsageAppEntity>>
+
+    @Query(
+        "SELECT packageName, MAX(label) AS label, SUM(foregroundMs) AS foregroundMs, " +
+            "SUM(opens) AS opens FROM usage_apps WHERE day BETWEEN :fromDay AND :toDay " +
+            "GROUP BY packageName ORDER BY foregroundMs DESC",
+    )
+    fun observeUsageAppTotals(fromDay: String, toDay: String): Flow<List<UsageAppTotal>>
+
+    /** The first day anything was recorded, which is how far back History lets the user go. */
+    @Query("SELECT MIN(day) FROM (SELECT day FROM usage_days UNION ALL SELECT day FROM reel_counts)")
+    suspend fun earliestRecordedDay(): String?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertUsageDay(entity: UsageDayEntity)
+
+    @Query("DELETE FROM usage_apps WHERE day = :day")
+    suspend fun clearUsageApps(day: String)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertUsageApps(entities: List<UsageAppEntity>)
 }
