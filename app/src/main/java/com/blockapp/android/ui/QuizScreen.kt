@@ -2,9 +2,12 @@ package com.blockapp.android.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
@@ -12,6 +15,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -28,6 +33,7 @@ import androidx.compose.material.icons.outlined.Bedtime
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -55,15 +61,17 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 /**
- * The onboarding quiz: five questions about the user's scrolling, then the plan ReelPlan builds
- * from them, which the user can start or skip. Shown on first launch (MainActivity checks
- * [ReelPlan.quizSeen]) and again from the plan screen to rebuild a plan.
+ * The onboarding quiz: seven short questions about the user's scrolling and their reasons, then
+ * the plan ReelPlan builds from them, which the user commits to with a hold or skips. Shown on
+ * first launch (MainActivity checks [ReelPlan.quizSeen]) and again from the plan screen to
+ * rebuild a plan.
  *
  * Starting a plan here can only ever tighten what is already in force (see ReelPlan's class doc),
  * so retaking the quiz with gentler answers is not a way to switch reels back on today.
  *
  * Answers live in rememberSaveable state, so a rotation or a trip to Settings mid-quiz keeps them.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun QuizScreen(onDone: () -> Unit) {
     val context = LocalContext.current
@@ -72,14 +80,20 @@ fun QuizScreen(onDone: () -> Unit) {
     var reelsIndex by rememberSaveable { mutableIntStateOf(-1) }
     var minutesIndex by rememberSaveable { mutableIntStateOf(-1) }
     var moments by rememberSaveable { mutableStateOf(setOf<Int>()) }
+    var reasons by rememberSaveable { mutableStateOf(setOf<Int>()) }
+    var ownWords by rememberSaveable { mutableStateOf("") }
+    var alternatives by rememberSaveable { mutableStateOf(setOf<Int>()) }
     var goalIndex by rememberSaveable { mutableIntStateOf(-1) }
 
     fun answers() = ReelPlan.Answers(
         apps = apps,
         reelsPerDay = REEL_CHOICES.getOrNull(reelsIndex)?.second,
-        minutesPerDay = MINUTE_CHOICES.getOrNull(minutesIndex)?.second ?: 60,
+        minutesPerDay = MINUTE_CHOICES.getOrNull(minutesIndex)?.second ?: DEFAULT_MINUTES,
         moments = moments.mapNotNull { ReelPlan.Moment.entries.getOrNull(it) }.toSet(),
         goal = ReelPlan.Goal.entries.getOrElse(goalIndex) { ReelPlan.Goal.CUT_DOWN },
+        reasons = reasons.mapNotNull { ReelPlan.Reason.entries.getOrNull(it) }.toSet(),
+        ownWords = ownWords,
+        alternatives = alternatives.mapNotNull { ReelPlan.Alternative.entries.getOrNull(it) }.toSet(),
     )
 
     fun skip() {
@@ -96,6 +110,8 @@ fun QuizScreen(onDone: () -> Unit) {
         STEP_REELS -> reelsIndex >= 0
         STEP_MINUTES -> minutesIndex >= 0
         STEP_MOMENTS -> moments.isNotEmpty()
+        STEP_REASONS -> reasons.isNotEmpty() || ownWords.isNotBlank()
+        STEP_ALTERNATIVES -> true
         STEP_GOAL -> goalIndex >= 0
         else -> true
     }
@@ -103,7 +119,7 @@ fun QuizScreen(onDone: () -> Unit) {
     Column(Modifier.fillMaxSize()) {
         if (step in STEP_APPS..STEP_GOAL) {
             QuizTopBar(
-                progress = step / STEP_GOAL.toFloat(),
+                step = step,
                 onBack = { step-- },
                 onSkip = ::skip,
             )
@@ -161,8 +177,46 @@ fun QuizScreen(onDone: () -> Unit) {
                         )
                     }
                 }
+                STEP_REASONS -> Question(
+                    title = "Why do you want this?",
+                    subtitle = "Pick what's true. When the reel wall stops you, it reads your reason back.",
+                ) {
+                    ReelPlan.Reason.entries.forEach { reason ->
+                        val i = reason.ordinal
+                        ChoiceCard(
+                            title = reason.title,
+                            subtitle = reason.line,
+                            selected = i in reasons,
+                            onClick = { reasons = if (i in reasons) reasons - i else reasons + i },
+                        )
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    OutlinedTextField(
+                        value = ownWords,
+                        onValueChange = { if (it.length <= MAX_OWN_WORDS) ownWords = it },
+                        label = { Text("Or in your own words") },
+                        placeholder = { Text("I want to read to my kids at night") },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                STEP_ALTERNATIVES -> Question(
+                    title = "What would you rather do?",
+                    subtitle = "When the wall stops you, these are what it suggests instead. Optional.",
+                ) {
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        ReelPlan.Alternative.entries.forEach { alternative ->
+                            val i = alternative.ordinal
+                            ToggleChip(alternative.title, i in alternatives) {
+                                alternatives = if (i in alternatives) alternatives - i else alternatives + i
+                            }
+                        }
+                    }
+                }
                 STEP_GOAL -> Question(
-                    title = "What do you want?",
+                    title = "How fast do you want to go?",
                     subtitle = "You can rebuild the plan any time. It can only get stricter on the day, though.",
                 ) {
                     ReelPlan.Goal.entries.forEachIndexed { index, goal ->
@@ -187,7 +241,11 @@ fun QuizScreen(onDone: () -> Unit) {
         }
         if (step in STEP_APPS..STEP_GOAL) {
             PrimaryButton(
-                text = if (step == STEP_GOAL) "Build my plan" else "Continue",
+                text = when {
+                    step == STEP_GOAL -> "Build my plan"
+                    step == STEP_ALTERNATIVES && alternatives.isEmpty() -> "Skip this one"
+                    else -> "Continue"
+                },
                 onClick = { step++ },
                 enabled = canContinue,
                 modifier = Modifier
@@ -199,18 +257,44 @@ fun QuizScreen(onDone: () -> Unit) {
 }
 
 @Composable
-private fun QuizTopBar(progress: Float, onBack: () -> Unit, onSkip: () -> Unit) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .padding(start = 4.dp, end = 8.dp, top = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        IconButton(onClick = onBack) {
-            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+private fun QuizTopBar(step: Int, onBack: () -> Unit, onSkip: () -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(start = 4.dp, end = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+            }
+            Text(
+                "Question $step of $STEP_GOAL",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = onSkip) { Text("Skip") }
         }
-        Meter(progress, MaterialTheme.colorScheme.primary, modifier = Modifier.weight(1f), height = 6.dp)
-        TextButton(onClick = onSkip) { Text("Skip") }
+        // One segment per question, so how much is left is countable rather than a vague bar.
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = ScreenPadding),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            repeat(STEP_GOAL) { index ->
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .height(4.dp)
+                        .clip(RoundedCornerShape(50))
+                        .background(
+                            if (index < step) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh,
+                        ),
+                )
+            }
+        }
     }
 }
 
@@ -223,28 +307,48 @@ private fun Intro(onStart: () -> Unit, onSkip: () -> Unit) {
             .padding(horizontal = ScreenPadding),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Spacer(Modifier.height(40.dp))
-        ReelStackArt(height = 240.dp)
+        Spacer(Modifier.height(36.dp))
+        ReelStackArt(height = 230.dp)
         Spacer(Modifier.height(32.dp))
         Text(
-            "Let's get your evenings back",
+            "Take your time back from reels",
             style = MaterialTheme.typography.headlineLarge,
             textAlign = TextAlign.Center,
         )
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(12.dp))
         Text(
-            "Five quick questions about how you scroll. You get a plan that brings your reels " +
-                "down a step at a time, and that follows you down when you beat it.",
+            "Seven quick questions. You get a plan that brings your reels down a step at a time, " +
+                "follows you down when you beat it, and keeps score of every day you stop on your own.",
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
         )
+        Spacer(Modifier.height(20.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            IntroFact("2 min", "to answer")
+            IntroFact("Weekly", "steps down")
+            IntroFact("0", "data shared")
+        }
         Spacer(Modifier.weight(1f))
         Spacer(Modifier.height(28.dp))
         PrimaryButton("Start", onClick = onStart, modifier = Modifier.fillMaxWidth())
         TextButton(onClick = onSkip, modifier = Modifier.padding(vertical = 8.dp)) {
             Text("Skip for now")
         }
+    }
+}
+
+@Composable
+private fun IntroFact(value: String, label: String) {
+    Column(
+        Modifier
+            .clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainer)
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(value, style = MaterialTheme.typography.titleLarge)
+        Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
@@ -256,7 +360,7 @@ private fun Question(title: String, subtitle: String, choices: @Composable () ->
             .verticalScroll(rememberScrollState())
             .padding(horizontal = ScreenPadding),
     ) {
-        Spacer(Modifier.height(20.dp))
+        Spacer(Modifier.height(24.dp))
         Text(title, style = MaterialTheme.typography.headlineMedium)
         Spacer(Modifier.height(8.dp))
         Text(subtitle, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -308,11 +412,14 @@ private fun PlanReveal(
     onSkip: () -> Unit,
 ) {
     val plan = remember(answers) { ReelPlan.build(answers) }
-    val suggestedQuiet = remember(answers) { ReelPlan.suggestedQuietHours(answers.moments) }
-    var useQuiet by rememberSaveable { mutableStateOf(true) }
+    val suggested = remember(answers) { ReelPlan.suggestedQuietHours(answers.moments) }
+    var useQuiet by rememberSaveable { mutableStateOf(suggested != null) }
+    var quietStart by rememberSaveable { mutableIntStateOf(suggested?.start ?: DEFAULT_QUIET_START) }
+    var quietEnd by rememberSaveable { mutableIntStateOf(suggested?.end ?: DEFAULT_QUIET_END) }
+    val quiet = ReelPlan.QuietHours(quietStart, quietEnd)
     val goalDay = plan.startDay.plusWeeks((plan.weeks - 1).toLong())
-    // A reel plus the scroll to the next is about 20 seconds.
     val hoursBackPerWeek = (plan.baseline - plan.targetLimit) * REEL_SECONDS * 7 / 3600f
+    val why = answers.whyLine()
 
     Column(
         Modifier
@@ -324,6 +431,13 @@ private fun PlanReveal(
         Eyebrow("Your plan", color = Ember)
         Spacer(Modifier.height(6.dp))
         Text(plan.goal.title, style = MaterialTheme.typography.headlineLarge)
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "${plan.weeks} weeks, from about ${plan.baseline} reels a day to " +
+                (if (plan.targetLimit == 0) "none." else "${plan.targetLimit}."),
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         Spacer(Modifier.height(20.dp))
 
         Panel {
@@ -333,23 +447,12 @@ private fun PlanReveal(
                     Spacer(Modifier.height(4.dp))
                     Text("${plan.startLimit}", style = MaterialTheme.typography.displayMedium)
                     Text(
-                        "reels a day, down from about ${plan.baseline}",
+                        "reels a day, then less each week",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                Box(
-                    Modifier
-                        .clip(RoundedCornerShape(18.dp))
-                        .background(MaterialTheme.colorScheme.primary)
-                        .padding(horizontal = 14.dp, vertical = 10.dp),
-                ) {
-                    Text(
-                        if (plan.targetLimit == 0) "Goal: 0" else "Goal: ${plan.targetLimit}",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.onPrimary,
-                    )
-                }
+                StatusPill(if (plan.targetLimit == 0) "Goal: 0" else "Goal: ${plan.targetLimit}", MaterialTheme.colorScheme.primary)
             }
             Spacer(Modifier.height(18.dp))
             BarChart(
@@ -362,41 +465,63 @@ private fun PlanReveal(
             Spacer(Modifier.height(12.dp))
             Text(
                 "Reaches the goal by ${goalDay.format(DateTimeFormatter.ofPattern("d MMMM", Locale.getDefault()))}. " +
-                    "If you watch fewer than planned for a few days, the limit follows you down early.",
+                    "Watch fewer than planned for a few days and the limit follows you down early.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
 
-        if (suggestedQuiet != null) {
-            Spacer(Modifier.height(12.dp))
-            Panel {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconTile(Icons.Outlined.Bedtime, tint = Ember, background = EmberWash)
-                    Spacer(Modifier.width(14.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text("Reel-free hours", style = MaterialTheme.typography.titleMedium)
-                        Text(
-                            "${suggestedQuiet.label()}, every day",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    Switch(
-                        checked = useQuiet,
-                        onCheckedChange = { useQuiet = it },
-                        colors = SwitchDefaults.colors(checkedTrackColor = MaterialTheme.colorScheme.primary),
+        Spacer(Modifier.height(12.dp))
+        Panel {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconTile(Icons.Outlined.Bedtime, tint = Ember, background = EmberWash)
+                Spacer(Modifier.width(14.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("Reel-free hours", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        if (useQuiet) "${quiet.label()}, every day" else "Off",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+                Switch(
+                    checked = useQuiet,
+                    onCheckedChange = { useQuiet = it },
+                    colors = SwitchDefaults.colors(checkedTrackColor = MaterialTheme.colorScheme.primary),
+                )
+            }
+            AnimatedVisibility(
+                visible = useQuiet,
+                enter = expandVertically() + fadeIn(),
+                exit = shrinkVertically() + fadeOut(),
+            ) {
+                Column {
+                    Spacer(Modifier.height(14.dp))
+                    QuietHoursEditor(quiet) { changed ->
+                        if (changed.start != changed.end) {
+                            quietStart = changed.start
+                            quietEnd = changed.end
+                        }
+                    }
+                }
+            }
+        }
+
+        if (why != null) {
+            Spacer(Modifier.height(12.dp))
+            Panel {
+                Eyebrow("Your reason")
+                Spacer(Modifier.height(6.dp))
+                Text("“$why”", style = MaterialTheme.typography.titleLarge)
             }
         }
 
         if (hoursBackPerWeek >= 1f) {
             Spacer(Modifier.height(12.dp))
-            Panel {
+            Panel(color = MaterialTheme.colorScheme.primaryContainer) {
                 Text(
                     "About ${hoursBackPerWeek.toInt()} hours a week back",
-                    style = MaterialTheme.typography.titleMedium,
+                    style = MaterialTheme.typography.titleLarge,
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
@@ -408,9 +533,16 @@ private fun PlanReveal(
         }
 
         Spacer(Modifier.height(24.dp))
-        PrimaryButton(
-            "Start my plan",
-            onClick = { onStart(plan, suggestedQuiet.takeIf { useQuiet }) },
+        HoldToConfirmButton(
+            "Hold to start my plan",
+            onConfirm = { onStart(plan, quiet.takeIf { useQuiet }) },
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "Limits only get stricter on the day. Anything looser starts tomorrow.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
             modifier = Modifier.fillMaxWidth(),
         )
         TextButton(onClick = onSkip, modifier = Modifier.align(Alignment.CenterHorizontally).padding(vertical = 8.dp)) {
@@ -425,11 +557,18 @@ private const val STEP_APPS = 1
 private const val STEP_REELS = 2
 private const val STEP_MINUTES = 3
 private const val STEP_MOMENTS = 4
-private const val STEP_GOAL = 5
-private const val STEP_BUILDING = 6
-private const val STEP_PLAN = 7
+private const val STEP_REASONS = 5
+private const val STEP_ALTERNATIVES = 6
+private const val STEP_GOAL = 7
+private const val STEP_BUILDING = 8
+private const val STEP_PLAN = 9
 
 private const val OTHER_APP = "Something else"
+
+/** Used when the time question was somehow skipped: a middling answer. */
+private const val DEFAULT_MINUTES = 60
+
+private const val MAX_OWN_WORDS = 120
 
 /** Label and the estimate it stands for. Null is "no idea": ReelPlan estimates from time spent. */
 private val REEL_CHOICES: List<Pair<String, Int?>> = listOf(
@@ -451,12 +590,17 @@ private val MINUTE_CHOICES: List<Pair<String, Int>> = listOf(
 
 private val BUILD_LINES = listOf(
     "Looking at how you scroll…",
-    "Setting your first step…",
-    "Picking your reel-free hours…",
+    "Working out your first step…",
+    "Spacing the weeks to your pace…",
+    "Setting your reel-free hours…",
 )
 
-/** Long enough to read each line, short enough that three of them don't feel like a wait. */
-private const val BUILD_LINE_MS = 700L
+/** Long enough to read each line, short enough that four of them don't feel like a wait. */
+private const val BUILD_LINE_MS = 650L
 
 /** One reel plus the swipe to the next, for the "hours back" estimate. */
 private const val REEL_SECONDS = 20f
+
+/** Offered when the user turns reel-free hours on without having picked a hard moment. */
+private const val DEFAULT_QUIET_START = 23 * 60
+private const val DEFAULT_QUIET_END = 7 * 60

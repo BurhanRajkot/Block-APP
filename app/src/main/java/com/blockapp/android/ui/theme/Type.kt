@@ -1,77 +1,111 @@
 package com.blockapp.android.ui.theme
 
 import androidx.compose.material3.Typography
+import androidx.compose.ui.text.ExperimentalTextApi
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontVariation
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
+import com.blockapp.android.R
 
-// The platform sans throughout. No bundled font file and no network download (invariant 8
-// forbids INTERNET). The character comes from weight and tracking instead: heavy, tightly
-// tracked numerals for the figures this app is really about, and quiet small text around them.
-private val Base = Typography()
+// Two bundled faces, both under the SIL Open Font License, both variable fonts in res/font:
+//
+// - Bricolage Grotesque for figures and headings. It has an optical-size axis, so the same file
+//   draws a tight, high-contrast face at display sizes and a sturdier one at title sizes, and a
+//   width axis, used slightly narrowed so big counts fit beside a ring at phone width.
+// - Manrope for everything read rather than looked at: body, labels, buttons. Even and open at
+//   small sizes on a dark background, which the platform sans was not at 12sp in BoneMuted.
+//
+// Bundled rather than fetched through a downloadable-fonts provider: that route goes through
+// Play services and simply falls back to the platform font when it can't, and invariant 8 rules
+// out fetching anything ourselves. Both files together add about 570KB to the APK.
+//
+// Variable fonts need API 26 for their variation settings, which is this app's minSdk.
 
 /** Tabular figures, so a ticking countdown or a changing total doesn't jitter sideways. */
 private const val TABULAR = "tnum"
 
-internal val AppTypography = Base.copy(
-    displayLarge = Base.displayLarge.copy(
-        fontWeight = FontWeight.Black,
-        fontSize = 64.sp,
-        lineHeight = 64.sp,
-        letterSpacing = (-2.5).sp,
-        fontFeatureSettings = TABULAR,
-    ),
-    displayMedium = Base.displayMedium.copy(
-        fontWeight = FontWeight.ExtraBold,
-        fontSize = 48.sp,
-        lineHeight = 50.sp,
-        letterSpacing = (-1.8).sp,
-        fontFeatureSettings = TABULAR,
-    ),
-    displaySmall = Base.displaySmall.copy(
-        fontWeight = FontWeight.ExtraBold,
-        fontSize = 36.sp,
-        lineHeight = 40.sp,
-        letterSpacing = (-1.2).sp,
-        fontFeatureSettings = TABULAR,
-    ),
-    headlineLarge = Base.headlineLarge.copy(
-        fontWeight = FontWeight.ExtraBold,
-        fontSize = 30.sp,
-        letterSpacing = (-0.8).sp,
-    ),
-    headlineMedium = Base.headlineMedium.copy(
-        fontWeight = FontWeight.Bold,
-        letterSpacing = (-0.6).sp,
-    ),
-    headlineSmall = Base.headlineSmall.copy(
-        fontWeight = FontWeight.Bold,
-        letterSpacing = (-0.4).sp,
-    ),
-    titleLarge = Base.titleLarge.copy(
-        fontWeight = FontWeight.Bold,
-        letterSpacing = (-0.3).sp,
-    ),
-    titleMedium = Base.titleMedium.copy(
-        fontWeight = FontWeight.SemiBold,
-        letterSpacing = (-0.1).sp,
-    ),
-    titleSmall = Base.titleSmall.copy(
-        fontWeight = FontWeight.SemiBold,
-    ),
-    bodyLarge = Base.bodyLarge.copy(letterSpacing = 0.sp),
-    bodyMedium = Base.bodyMedium.copy(letterSpacing = 0.sp),
-    labelLarge = Base.labelLarge.copy(
-        fontWeight = FontWeight.SemiBold,
-        letterSpacing = 0.1.sp,
-    ),
-    labelMedium = Base.labelMedium.copy(
-        fontWeight = FontWeight.SemiBold,
-        letterSpacing = 0.2.sp,
-        fontFeatureSettings = TABULAR,
-    ),
-    labelSmall = Base.labelSmall.copy(
-        fontWeight = FontWeight.SemiBold,
-        letterSpacing = 1.2.sp,
+@OptIn(ExperimentalTextApi::class)
+private fun bricolage(weight: Int, opticalSize: Float) = Font(
+    R.font.bricolage_grotesque,
+    weight = FontWeight(weight),
+    variationSettings = FontVariation.Settings(
+        FontVariation.weight(weight),
+        FontVariation.Setting("opsz", opticalSize),
+        FontVariation.width(DISPLAY_WIDTH),
     ),
 )
 
+@OptIn(ExperimentalTextApi::class)
+private fun manrope(weight: Int) = Font(
+    R.font.manrope,
+    weight = FontWeight(weight),
+    variationSettings = FontVariation.Settings(FontVariation.weight(weight)),
+)
+
+/** Big figures and screen titles: the display optical size. */
+internal val DisplayFamily = FontFamily(
+    bricolage(500, 60f),
+    bricolage(600, 60f),
+    bricolage(700, 60f),
+    bricolage(800, 60f),
+)
+
+/** Section and card titles: the same face at its text optical size. */
+internal val HeadingFamily = FontFamily(
+    bricolage(500, 24f),
+    bricolage(600, 24f),
+    bricolage(700, 24f),
+    bricolage(800, 24f),
+)
+
+internal val TextFamily = FontFamily(
+    manrope(400),
+    manrope(500),
+    manrope(600),
+    manrope(700),
+    manrope(800),
+)
+
+private fun style(
+    family: FontFamily,
+    weight: Int,
+    size: Int,
+    line: Int,
+    tracking: TextUnit = 0.sp,
+    features: String? = null,
+) = TextStyle(
+    fontFamily = family,
+    fontWeight = FontWeight(weight),
+    fontSize = size.sp,
+    lineHeight = line.sp,
+    letterSpacing = tracking,
+    fontFeatureSettings = features,
+)
+
+internal val AppTypography = Typography(
+    // Bricolage is already tight at its display optical size, so the tracking stays near zero:
+    // the -0.03em the platform sans needed ran this face's letters into each other.
+    displayLarge = style(DisplayFamily, 800, 64, 66, (-0.015).em, TABULAR),
+    displayMedium = style(DisplayFamily, 800, 50, 54, (-0.012).em, TABULAR),
+    displaySmall = style(DisplayFamily, 700, 36, 42, (-0.008).em, TABULAR),
+    headlineLarge = style(DisplayFamily, 700, 31, 37, (-0.005).em),
+    headlineMedium = style(HeadingFamily, 700, 25, 31, (-0.005).em),
+    headlineSmall = style(HeadingFamily, 700, 21, 27),
+    titleLarge = style(HeadingFamily, 700, 19, 24),
+    titleMedium = style(TextFamily, 700, 16, 22),
+    titleSmall = style(TextFamily, 700, 14, 19),
+    bodyLarge = style(TextFamily, 500, 16, 24),
+    bodyMedium = style(TextFamily, 500, 14, 21),
+    bodySmall = style(TextFamily, 500, 13, 18),
+    labelLarge = style(TextFamily, 700, 14, 18),
+    labelMedium = style(TextFamily, 700, 12, 16, 0.01.em, TABULAR),
+    labelSmall = style(TextFamily, 800, 11, 14, 0.12.em),
+)
+
+/** wdth on Bricolage's 75..100 axis: a touch narrow, so "1,240" fits beside a ring. */
+private const val DISPLAY_WIDTH = 92f

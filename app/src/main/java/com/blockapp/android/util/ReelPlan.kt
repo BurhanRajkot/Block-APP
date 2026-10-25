@@ -7,6 +7,8 @@ import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.temporal.ChronoUnit
 import kotlin.math.ceil
+import kotlin.math.ln
+import kotlin.math.pow
 import kotlin.math.roundToInt
 
 /**
@@ -30,10 +32,43 @@ import kotlin.math.roundToInt
  */
 object ReelPlan {
 
-    enum class Goal(val title: String, val blurb: String) {
-        CUT_DOWN("Cut down gently", "Small weekly steps. Hard to notice, easy to keep."),
-        CUT_HARD("Cut down fast", "Big steps over three weeks."),
-        QUIT("Quit reels", "Down to zero in two weeks. The rest of each app keeps working."),
+    /**
+     * The pace. [weeklyKeep] is the share of last week's limit each new week keeps, so every
+     * step feels the same size: a fixed number of reels off each week was a big cut at the end
+     * of a plan and barely noticeable at the start. [minWeeks]..[maxWeeks] bound how long the
+     * steps take to reach the goal.
+     */
+    enum class Goal(
+        val title: String,
+        val blurb: String,
+        val weeklyKeep: Double,
+        val minWeeks: Int,
+        val maxWeeks: Int,
+    ) {
+        CUT_DOWN("Cut down gently", "About a fifth less each week. Hard to notice, easy to keep.", 0.8, 4, 10),
+        CUT_HARD("Cut down fast", "Around a third less each week, in a month or so.", 0.65, 3, 6),
+        QUIT("Quit reels", "Halved every week, then zero. The rest of each app keeps working.", 0.5, 2, 6),
+    }
+
+    /** Why the user is doing this. The line is what the reel wall reads back to them. */
+    enum class Reason(val title: String, val line: String) {
+        SLEEP("Sleep better", "I want to sleep properly again."),
+        FOCUS("Focus on work or study", "I want my focus back."),
+        PEOPLE("Be there for people", "I want to be present with the people around me."),
+        MOOD("Feel calmer", "Scrolling leaves me feeling worse, not better."),
+        TIME("Get my time back", "I want my time back for things I care about."),
+        CONTROL("Be in control", "I want to decide when I pick up my phone."),
+    }
+
+    /** What the user would rather do. Offered on the reel wall instead of the next reel. */
+    enum class Alternative(val title: String) {
+        READ("Read a few pages"),
+        WALK("Go for a short walk"),
+        MOVE("Stretch or work out"),
+        CALL("Message someone you like"),
+        LISTEN("Put on music or a podcast"),
+        SLEEP("Put the phone down and sleep"),
+        CREATE("Make something"),
     }
 
     enum class Moment(val title: String) {
@@ -50,10 +85,21 @@ object ReelPlan {
         val minutesPerDay: Int,
         val moments: Set<Moment>,
         val goal: Goal,
-    )
+        val reasons: Set<Reason> = emptySet(),
+        /** The user's own words for why, which win over [reasons] on the wall. */
+        val ownWords: String = "",
+        val alternatives: Set<Alternative> = emptySet(),
+    ) {
+        /** The one line the wall reads back: the user's own words, else their first reason. */
+        fun whyLine(): String? =
+            ownWords.trim().takeIf { it.isNotEmpty() } ?: Reason.entries.firstOrNull { it in reasons }?.line
+    }
 
     /** A daily window in local minutes since midnight. [end] before [start] crosses midnight. */
     data class QuietHours(val start: Int, val end: Int) {
+        /** Length of the window in minutes. */
+        val minutes: Int get() = if (start <= end) end - start else MINUTES_PER_DAY - start + end
+
         fun contains(minuteOfDay: Int): Boolean =
             if (start <= end) minuteOfDay in start until end else minuteOfDay >= start || minuteOfDay < end
 
@@ -61,7 +107,7 @@ object ReelPlan {
         fun covers(other: QuietHours): Boolean =
             (0 until MINUTES_PER_DAY).none { other.contains(it) && !contains(it) }
 
-        fun label(): String = "${clock(start)} – ${clock(end)}"
+        fun label(): String = "${clockLabel(start)} – ${clockLabel(end)}"
     }
 
     data class Plan(
@@ -72,13 +118,24 @@ object ReelPlan {
         val weeks: Int,
         val goal: Goal,
     ) {
-        /** The limit for each week of the plan, first week first. After the last, it holds. */
+        /**
+         * The limit for each week of the plan, first week first. After the last, it holds.
+         *
+         * A geometric curve from start to target, so each week takes off the same share of the
+         * last one. For a plan already running this is never above the straight line it
+         * replaced (same endpoints, convex curve), and ReelLimit only ever tightens anyway, so
+         * an update can't loosen anyone's current week. A target of 0 runs the curve down to
+         * one reel and then makes the last week zero.
+         */
         val steps: List<Int> = List(weeks) { week ->
-            if (weeks == 1) {
-                targetLimit
-            } else {
-                roundDownTo5(startLimit - (startLimit - targetLimit) * week / (weeks - 1).toFloat())
-                    .coerceAtLeast(targetLimit)
+            when {
+                week == weeks - 1 || weeks == 1 -> targetLimit
+                week == 0 -> startLimit
+                else -> {
+                    val floor = targetLimit.coerceAtLeast(1).toDouble()
+                    val ratio = (floor / startLimit.coerceAtLeast(1)).pow(week / (weeks - 1).toDouble())
+                    roundStep(startLimit * ratio).coerceIn(targetLimit, startLimit)
+                }
             }
         }
 
@@ -97,19 +154,35 @@ object ReelPlan {
      * already feel like a change, and people underestimate how many reels they watch.
      */
     fun build(answers: Answers, today: LocalDate = LocalDate.now()): Plan {
-        val baseline = (answers.reelsPerDay ?: (answers.minutesPerDay * REELS_PER_MINUTE))
-            .coerceIn(MIN_BASELINE, MAX_BASELINE)
-        val (startShare, targetShare, weeks) = when (answers.goal) {
-            Goal.CUT_DOWN -> Triple(0.8f, 0.3f, 6)
-            Goal.CUT_HARD -> Triple(0.6f, 0.15f, 3)
-            Goal.QUIT -> Triple(0.5f, 0f, 2)
-        }
-        val target = when (answers.goal) {
+        val goal = answers.goal
+        val baseline = estimateBaseline(answers)
+        // The first step is one week's cut below where the user is, so day one is already a
+        // change. The goal is a share of the baseline, never below a few a day for the
+        // cut-down paces: a goal of 2 reels a day is a quit plan under another name.
+        val start = roundStep(baseline * goal.weeklyKeep).coerceAtLeast(MIN_TARGET)
+        val target = when (goal) {
             Goal.QUIT -> 0
-            else -> roundDownTo5(baseline * targetShare).coerceAtLeast(MIN_TARGET)
+            Goal.CUT_DOWN -> roundStep(baseline * CUT_DOWN_TARGET_SHARE).coerceIn(MIN_TARGET, start)
+            Goal.CUT_HARD -> roundStep(baseline * CUT_HARD_TARGET_SHARE).coerceIn(MIN_TARGET, start)
         }
-        val start = roundDownTo5(baseline * startShare).coerceAtLeast(target)
-        return Plan(today, baseline, start, target, weeks, answers.goal)
+        // How many weekly steps of this pace it takes to get from start to target, plus the
+        // first week itself. A quit plan's curve aims at a handful a day and then drops to 0.
+        val aim = if (goal == Goal.QUIT) QUIT_LAST_STEP.toDouble() else target.coerceAtLeast(1).toDouble()
+        val stepsNeeded = if (start <= aim) 0 else ceil(ln(aim / start) / ln(goal.weeklyKeep)).toInt()
+        val extra = if (goal == Goal.QUIT) 2 else 1
+        val weeks = (stepsNeeded + extra).coerceIn(goal.minWeeks, goal.maxWeeks)
+        return Plan(today, baseline, start, target, weeks, goal)
+    }
+
+    /**
+     * The user's typical day in reels. Their own reel guess and their time guess are both
+     * noisy, so when they gave both the higher one is used: people underestimate reels far
+     * more than minutes, and a plan that starts above the real number limits nothing.
+     */
+    fun estimateBaseline(answers: Answers): Int {
+        val fromMinutes = answers.minutesPerDay * REELS_PER_MINUTE
+        val guess = answers.reelsPerDay?.let { maxOf(it, fromMinutes / 2) } ?: fromMinutes
+        return guess.coerceIn(MIN_BASELINE, MAX_BASELINE)
     }
 
     /** The reel-free hours the quiz suggests from the moments the user picked, or null. */
@@ -184,6 +257,7 @@ object ReelPlan {
      * delays any narrowing of the window to tomorrow.
      */
     fun start(context: Context, answers: Answers, plan: Plan, quiet: QuietHours?) {
+        val why = answers.whyLine()
         prefs(context).edit()
             .putString(PLAN_START, plan.startDay.toString())
             .putInt(BASELINE, plan.baseline)
@@ -193,6 +267,8 @@ object ReelPlan {
             .putInt(GOAL, plan.goal.ordinal)
             .putInt(ANSWER_MINUTES, answers.minutesPerDay)
             .putStringSet(ANSWER_APPS, answers.apps)
+            .putString(WHY, why)
+            .putStringSet(ALTERNATIVES, answers.alternatives.map { it.name }.toSet())
             .remove(STOP_FROM)
             .putBoolean(QUIZ_SEEN, true)
             .apply()
@@ -214,6 +290,26 @@ object ReelPlan {
         prefs(context).getStringSet(ANSWER_APPS, emptySet()).orEmpty()
 
     /**
+     * The user's reason, in their words or the quiz's. Shown on the reel wall and the plan
+     * screen. Editable at any time: it changes no limit, so it's not a loosening.
+     */
+    fun why(context: Context): String? = prefs(context).getString(WHY, null)?.takeIf { it.isNotBlank() }
+
+    fun setWhy(context: Context, why: String) {
+        prefs(context).edit().putString(WHY, why.trim()).apply()
+    }
+
+    /** What the user said they'd rather do, quiz order. */
+    fun alternatives(context: Context): List<Alternative> {
+        val names = prefs(context).getStringSet(ALTERNATIVES, emptySet()).orEmpty()
+        return Alternative.entries.filter { it.name in names }
+    }
+
+    fun setAlternatives(context: Context, alternatives: Set<Alternative>) {
+        prefs(context).edit().putStringSet(ALTERNATIVES, alternatives.map { it.name }.toSet()).apply()
+    }
+
+    /**
      * Applies the plan to today's ReelLimit. Lowers it only, so it is safe to call as often as
      * convenient: on process start, on every Home resume, daily from UsageArchiveReceiver, and
      * at midnight from the service. The first form reads the recent days itself.
@@ -222,6 +318,8 @@ object ReelPlan {
     suspend fun refresh(context: Context, repository: BlockRepository) {
         if (current(context) == null) return
         refresh(context, repository.recentDailyReels(ADAPT_WINDOW_DAYS))
+        // The day's record carries the limit that applied, which PlanProgress judges it by.
+        repository.recordPlanDay(ReelLimit.todayLimit(context), tracked = false)
     }
 
     fun refresh(context: Context, recentDailyReels: List<Int>) {
@@ -309,10 +407,17 @@ object ReelPlan {
     private fun prefs(context: Context) =
         context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
-    private fun roundDownTo5(value: Float): Int = (value / 5f).toInt() * 5
+    /**
+     * Steps round down to a multiple of 5 while they're big, and to the reel once they're small:
+     * rounding 7 down to 5 is a cut of nearly a third that the plan never chose.
+     */
+    private fun roundStep(value: Double): Int =
+        if (value >= ROUND_TO_5_FROM) (value / 5.0).toInt() * 5 else value.toInt()
+
     private fun roundUpTo5(value: Double): Int = (ceil(value / 5.0) * 5).roundToInt()
 
-    private fun clock(minuteOfDay: Int): String {
+    /** "11 PM", "6:30 AM": a minute of the day as the plan shows it. */
+    fun clockLabel(minuteOfDay: Int): String {
         val hour = minuteOfDay / 60
         val minute = minuteOfDay % 60
         val h12 = if (hour % 12 == 0) 12 else hour % 12
@@ -329,6 +434,16 @@ object ReelPlan {
 
     /** The lowest goal the cut-down plans aim for: a few reels a day is a realistic floor. */
     private const val MIN_TARGET = 5
+
+    /** Where each cut-down pace ends, as a share of the baseline. */
+    private const val CUT_DOWN_TARGET_SHARE = 0.25
+    private const val CUT_HARD_TARGET_SHARE = 0.12
+
+    /** A quit plan's last non-zero week, before the week at zero. */
+    private const val QUIT_LAST_STEP = 5
+
+    /** Below this a step is rounded to the reel, not to 5; see roundStep. */
+    private const val ROUND_TO_5_FROM = 20.0
 
     /**
      * Complete days with a count before the limit starts following the user down. Fewer than
@@ -354,6 +469,8 @@ object ReelPlan {
     private const val GOAL = "goal"
     private const val ANSWER_MINUTES = "answer_minutes"
     private const val ANSWER_APPS = "answer_apps"
+    private const val WHY = "why"
+    private const val ALTERNATIVES = "alternatives"
     private const val STOP_FROM = "stop_from"
     private const val QUIET_START = "quiet_start"
     private const val QUIET_END = "quiet_end"

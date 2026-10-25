@@ -40,6 +40,8 @@ import androidx.compose.material.icons.outlined.AccessibilityNew
 import androidx.compose.material.icons.outlined.Alarm
 import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material.icons.outlined.BatteryChargingFull
+import androidx.compose.material.icons.outlined.HourglassDisabled
+import androidx.compose.material.icons.outlined.Layers
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Shield
@@ -63,13 +65,19 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.blockapp.android.admin.DeviceAdminHelper
+import com.blockapp.android.admin.OemBackground
 import com.blockapp.android.admin.RestrictedSettings
 import com.blockapp.android.ui.theme.StatusColors
 import com.blockapp.android.usage.UsageStatsProvider
 
 /**
  * First-time setup, and where Settings → Permissions lands later. Two required steps
- * (Accessibility, then Device Admin) shown one at a time, then four optional reliability extras.
+ * (Accessibility, then Device Admin) shown one at a time, then the optional reliability extras
+ * Android can check, then the phone maker's own switches it can't (OemBackground).
+ *
+ * Accessibility is judged by whether the service is *running*, not only by the Settings switch
+ * (rememberProtection, ServiceState): a switch left on over a crashed service used to read as
+ * done here while nothing was blocked, and that step now says so and walks the fix.
  *
  * Invariant 1 lives here too: "Remove protection" stays in the header on every state of this
  * screen, because a user whose admin is active but whose setup broke comes here first.
@@ -85,16 +93,20 @@ fun OnboardingScreen(
     onRemoveProtection: () -> Unit,
 ) {
     val context = LocalContext.current
+    val protection = rememberProtection()
 
-    var isAccessibilityActive  by remember { mutableStateOf(DeviceAdminHelper.isAccessibilityActive(context)) }
-    var isAdminActive          by remember { mutableStateOf(DeviceAdminHelper.isAdminActive(context)) }
     var isBatteryUnrestricted  by remember { mutableStateOf(false) }
     var canScheduleExactAlarms by remember { mutableStateOf(false) }
     var hasNotifications       by remember { mutableStateOf(false) }
     var hasUsageAccess         by remember { mutableStateOf(false) }
+    var canDrawOverlays        by remember { mutableStateOf(false) }
+    var exemptFromHibernation  by remember { mutableStateOf(false) }
+    var oemDone                by remember { mutableStateOf(setOf<String>()) }
     var triedSwitch            by remember { mutableStateOf(RestrictedSettings.triedSwitch(context)) }
     var openedAppInfo          by remember { mutableStateOf(RestrictedSettings.openedAppInfo(context)) }
     val likelyRestricted       = remember { RestrictedSettings.likelyRestricted(context) }
+    val oemSteps               = remember { OemBackground.steps(context) }
+    val maker                  = remember { OemBackground.maker() }
 
     /**
      * Device Admin is launched through an activity-result launcher rather than
@@ -105,13 +117,12 @@ fun OnboardingScreen(
      * with no task flags at all and the activation dialog actually shows.
      *
      * The result is ignored — the user can back out of the system dialog without a cancel result
-     * on some builds — so admin state is re-read from DevicePolicyManager instead.
+     * on some builds — so admin state is re-read from DevicePolicyManager on resume instead
+     * (rememberProtection).
      */
     val adminLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
-    ) {
-        isAdminActive = DeviceAdminHelper.isAdminActive(context)
-    }
+    ) { }
 
     /**
      * For a result for the same reason as admin, but a different one: Settings only opens a
@@ -120,31 +131,38 @@ fun OnboardingScreen(
      */
     val accessibilityLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
-    ) {
-        isAccessibilityActive = DeviceAdminHelper.isAccessibilityActive(context)
-    }
+    ) { }
 
     fun openAccessibilitySwitch() {
         try {
             accessibilityLauncher.launch(RestrictedSettings.accessibilityDetailsIntent(context))
         } catch (e: ActivityNotFoundException) {
             openOrExplain(context, RestrictedSettings.accessibilityListIntent(), "Settings → Accessibility")
+        } catch (e: SecurityException) {
+            // Some OEM builds refuse the details action to third-party callers outright rather
+            // than falling back to the list themselves.
+            openOrExplain(context, RestrictedSettings.accessibilityListIntent(), "Settings → Accessibility")
         }
     }
 
     // Re-check every time this screen resumes (e.g. coming back from Settings).
     LifecycleResumeEffect(Unit) {
-        isAccessibilityActive  = DeviceAdminHelper.isAccessibilityActive(context)
-        isAdminActive          = DeviceAdminHelper.isAdminActive(context)
         isBatteryUnrestricted  = DeviceAdminHelper.isIgnoringBatteryOptimizations(context)
         canScheduleExactAlarms = DeviceAdminHelper.canScheduleExactAlarms(context)
         hasNotifications       = DeviceAdminHelper.areNotificationsEnabled(context)
         hasUsageAccess         = UsageStatsProvider.hasUsageAccess(context)
+        canDrawOverlays        = DeviceAdminHelper.canDrawOverlays(context)
+        exemptFromHibernation  = DeviceAdminHelper.isExemptFromHibernation(context)
+        oemDone                = oemSteps.filter { OemBackground.isDone(context, it) }.map { it.id }.toSet()
         onPauseOrDispose {}
     }
 
-    val requiredDone = listOf(isAccessibilityActive, isAdminActive).count { it }
-    val allRequired = requiredDone == 2
+    val isAccessibilityActive = protection.accessibilityOn
+    val isAdminActive = protection.admin
+    val accessibilityDone = protection.accessibility == AccessibilityUi.RUNNING ||
+        protection.accessibility == AccessibilityUi.STARTING
+    val requiredDone = listOf(accessibilityDone, isAdminActive).count { it }
+    val allRequired = isAccessibilityActive && isAdminActive
 
     Column(
         Modifier
@@ -152,9 +170,9 @@ fun OnboardingScreen(
             .verticalScroll(rememberScrollState()),
     ) {
         ScreenHeader(
-            title = if (allRequired) "You're protected" else "Set up protection",
-            subtitle = if (allRequired) {
-                "Both switches are on. The extras below make locks harder to break."
+            title = if (protection.isProtected) "You're protected" else "Set up protection",
+            subtitle = if (protection.isProtected) {
+                "Both switches are on and blocking is running. The extras below make it harder to break."
             } else {
                 "Two switches make blocking work. About a minute."
             },
@@ -174,13 +192,22 @@ fun OnboardingScreen(
                 StepPanel(
                     number = 1,
                     icon = Icons.Outlined.AccessibilityNew,
-                    title = "Accessibility",
+                    title = when (protection.accessibility) {
+                        AccessibilityUi.NOT_RUNNING -> "Accessibility is on but not running"
+                        AccessibilityUi.STARTING -> "Accessibility · starting"
+                        else -> "Accessibility"
+                    },
                     why = "Lets App Blocker see which app is in front, so it can send you away " +
                         "from a locked one and count reels. Everything stays on this phone. It " +
                         "doesn't record what you type or keep what's on screen.",
-                    state = if (isAccessibilityActive) StepState.Done else StepState.Active,
+                    state = when (protection.accessibility) {
+                        AccessibilityUi.RUNNING, AccessibilityUi.STARTING -> StepState.Done
+                        else -> StepState.Active
+                    },
                 ) {
-                    if (RestrictedSettings.applies()) {
+                    if (protection.accessibility == AccessibilityUi.NOT_RUNNING) {
+                        NotRunningFix(maker = maker, onOpenSwitch = ::openAccessibilitySwitch)
+                    } else if (RestrictedSettings.applies()) {
                         AccessibilityWalkthrough(
                             likelyRestricted = likelyRestricted,
                             triedSwitch = triedSwitch,
@@ -202,7 +229,7 @@ fun OnboardingScreen(
                     } else {
                         HowTo(
                             listOf(
-                                "Find \"App Blocker\", usually under Downloaded apps",
+                                "Find \"App Blocker\", usually under Downloaded apps or Installed apps",
                                 "Turn the switch on, then tap Allow",
                             ),
                         )
@@ -256,6 +283,12 @@ fun OnboardingScreen(
                                         "\"App Blocker\" under Settings → Security → Device admin apps.",
                                     Toast.LENGTH_LONG,
                                 ).show()
+                            } catch (e: SecurityException) {
+                                Toast.makeText(
+                                    context,
+                                    "Add \"App Blocker\" under Settings → Security → Device admin apps.",
+                                    Toast.LENGTH_LONG,
+                                ).show()
                             }
                         },
                         modifier = Modifier.fillMaxWidth(),
@@ -264,7 +297,7 @@ fun OnboardingScreen(
             }
 
             AnimatedVisibility(
-                visible = allRequired,
+                visible = protection.isProtected,
                 enter = expandVertically() + fadeIn(),
                 exit = shrinkVertically() + fadeOut(),
             ) {
@@ -283,35 +316,61 @@ fun OnboardingScreen(
                 }
             }
 
-            val extras = listOf(
-                Extra(
-                    Icons.Outlined.BatteryChargingFull,
-                    "Unrestricted battery",
-                    "Stops Android from putting App Blocker to sleep partway through a lock.",
-                    isBatteryUnrestricted,
-                ) { requestIgnoreBatteryOptimizations(context) },
-                Extra(
-                    Icons.Outlined.Alarm,
-                    "Exact alarms",
-                    "Ends a lock the minute its timer runs out, not a few minutes late.",
-                    canScheduleExactAlarms,
-                ) { requestScheduleExactAlarm(context) },
-                Extra(
-                    Icons.Outlined.Notifications,
-                    "Notifications",
-                    "Shows the \"blocking is on\" notification, which keeps the app from being killed quietly.",
-                    hasNotifications,
-                ) { openNotificationSettings(context) },
-                Extra(
-                    Icons.Outlined.BarChart,
-                    "Usage access",
-                    "Only for the screen-time charts. Nothing leaves the phone.",
-                    hasUsageAccess,
-                ) { openUsageAccessSettings(context) },
-            )
+            val extras = buildList {
+                add(
+                    Extra(
+                        Icons.Outlined.BatteryChargingFull,
+                        "Unrestricted battery",
+                        "Stops Android from putting App Blocker to sleep partway through a lock.",
+                        isBatteryUnrestricted,
+                    ) { requestIgnoreBatteryOptimizations(context) },
+                )
+                add(
+                    Extra(
+                        Icons.Outlined.Layers,
+                        "Display over other apps",
+                        "Lets the block screen appear reliably after a bounce. Needed on Xiaomi and some others.",
+                        canDrawOverlays,
+                    ) { requestOverlay(context) },
+                )
+                add(
+                    Extra(
+                        Icons.Outlined.Alarm,
+                        "Exact alarms",
+                        "Ends a lock the minute its timer runs out, not a few minutes late.",
+                        canScheduleExactAlarms,
+                    ) { requestScheduleExactAlarm(context) },
+                )
+                add(
+                    Extra(
+                        Icons.Outlined.Notifications,
+                        "Notifications",
+                        "Shows the \"blocking is on\" notification, which keeps the app from being killed quietly.",
+                        hasNotifications,
+                    ) { openNotificationSettings(context) },
+                )
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    add(
+                        Extra(
+                            Icons.Outlined.HourglassDisabled,
+                            "Don't pause when unused",
+                            "Turn off \"Pause app activity if unused\" so Android never strips its permissions.",
+                            exemptFromHibernation,
+                        ) { requestHibernationExemption(context) },
+                    )
+                }
+                add(
+                    Extra(
+                        Icons.Outlined.BarChart,
+                        "Usage access",
+                        "Only for the screen-time charts. Nothing leaves the phone.",
+                        hasUsageAccess,
+                    ) { openUsageAccessSettings(context) },
+                )
+            }
             Spacer(Modifier.height(28.dp))
             Row(verticalAlignment = Alignment.Bottom) {
-                Text("Make it reliable", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                Text("Make it reliable", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
                 Text(
                     "${extras.count { it.granted }} of ${extras.size} on",
                     style = MaterialTheme.typography.labelLarge,
@@ -320,13 +379,55 @@ fun OnboardingScreen(
             }
             Spacer(Modifier.height(4.dp))
             Text(
-                "Optional. Locks work without these, just less dependably.",
+                "Optional. Locks work without these, just less dependably. Each one ticks itself.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.height(12.dp))
             extras.forEachIndexed { index, extra ->
                 Reveal(2 + index) { ExtraRow(extra) }
+                Spacer(Modifier.height(8.dp))
+            }
+
+            Spacer(Modifier.height(20.dp))
+            Row(verticalAlignment = Alignment.Bottom) {
+                Text(
+                    if (maker == OemBackground.Maker.OTHER) "On this phone" else "On your ${maker.label}",
+                    style = MaterialTheme.typography.headlineSmall,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    "${oemDone.size} of ${oemSteps.size} done",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                if (maker == OemBackground.Maker.OTHER) {
+                    "One more habit that keeps a blocker alive on any phone."
+                } else {
+                    "${maker.label} phones close background apps on their own. These switches stop " +
+                        "that. Android can't read them, so tick each one off yourself."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(12.dp))
+            oemSteps.forEach { step ->
+                OemStepRow(
+                    step = step,
+                    done = step.id in oemDone,
+                    onOpen = {
+                        if (!OemBackground.open(context, step)) {
+                            Toast.makeText(context, "Couldn't open it here. Look in Settings → Apps → App Blocker.", Toast.LENGTH_LONG).show()
+                        }
+                    },
+                    onToggle = { done ->
+                        OemBackground.markDone(context, step, done)
+                        oemDone = if (done) oemDone + step.id else oemDone - step.id
+                    },
+                )
                 Spacer(Modifier.height(8.dp))
             }
 
@@ -357,6 +458,95 @@ fun OnboardingScreen(
             Spacer(Modifier.height(24.dp))
         }
     }
+}
+
+/**
+ * Shown when the switch is on but the service isn't running: the service crashed, or the phone
+ * stopped it, and Android won't start it again until the switch is cycled. Samsung marks this
+ * "Not working" under the switch, a Pixel "This service is malfunctioning". The guard that
+ * bounces the Accessibility screen (Tier 1) lives in the stopped service, so the screen is
+ * reachable now even with Device Admin active.
+ */
+@Composable
+private fun NotRunningFix(maker: OemBackground.Maker, onOpenSwitch: () -> Unit) {
+    Panel(color = StatusColors.Warning.copy(alpha = 0.10f), contentPadding = androidx.compose.foundation.layout.PaddingValues(14.dp)) {
+        Text(
+            "The switch is on, but Android isn't running App Blocker's service, so nothing is " +
+                "being blocked." + if (maker == OemBackground.Maker.SAMSUNG) " Samsung shows this as \"Not working\"." else "",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+    }
+    Spacer(Modifier.height(12.dp))
+    HowTo(
+        listOf(
+            "Open the App Blocker switch",
+            "Turn it off, then on again, and tap Allow",
+            "Come back here. This step ticks itself once it's running",
+        ),
+    )
+    Spacer(Modifier.height(14.dp))
+    PrimaryButton("Open the switch", onOpenSwitch, Modifier.fillMaxWidth())
+    Spacer(Modifier.height(8.dp))
+    Text(
+        "If it keeps stopping, turn on Unrestricted battery and the steps for your phone below.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+@Composable
+private fun OemStepRow(
+    step: OemBackground.Step,
+    done: Boolean,
+    onOpen: () -> Unit,
+    onToggle: (Boolean) -> Unit,
+) {
+    Panel(contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 14.dp)) {
+        Row(verticalAlignment = Alignment.Top) {
+            Box(
+                Modifier
+                    .padding(top = 2.dp)
+                    .size(24.dp)
+                    .clip(CircleShape)
+                    .background(if (done) StatusColors.Success else Color.Transparent)
+                    .border(1.5.dp, if (done) StatusColors.Success else MaterialTheme.colorScheme.outline, CircleShape)
+                    .clickable { onToggle(!done) },
+                contentAlignment = Alignment.Center,
+            ) {
+                if (done) {
+                    Icon(Icons.Filled.Check, contentDescription = "Done", tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(15.dp))
+                }
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(step.title, style = MaterialTheme.typography.titleSmall)
+                Spacer(Modifier.height(2.dp))
+                Text(step.detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (step.intents.isNotEmpty()) {
+                        SmallAction("Open", filled = !done, onClick = onOpen)
+                    }
+                    SmallAction(if (done) "Not done" else "Mark done", filled = false) { onToggle(!done) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SmallAction(text: String, filled: Boolean, onClick: () -> Unit) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelLarge,
+        color = if (filled) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(if (filled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 8.dp),
+    )
 }
 
 // ── progress ───────────────────────────────────────────────────────────────────
@@ -711,6 +901,9 @@ private fun openOrExplain(context: Context, intent: Intent, where: String) {
         context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     } catch (e: ActivityNotFoundException) {
         Toast.makeText(context, "Open $where on this phone.", Toast.LENGTH_LONG).show()
+    } catch (e: SecurityException) {
+        // Not exported to third-party apps on some OEM builds; same answer as missing.
+        Toast.makeText(context, "Open $where on this phone.", Toast.LENGTH_LONG).show()
     }
 }
 
@@ -756,6 +949,29 @@ private fun openNotificationSettings(context: Context) {
     // minSdk. App info stays as a runtime fallback because some OEM builds don't resolve it.
     val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
         .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+    try {
+        context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    } catch (e: ActivityNotFoundException) {
+        openOrExplain(context, RestrictedSettings.appInfoIntent(context), "Settings → Apps → App Blocker")
+    }
+}
+
+/** The system's own "Display over other apps" page for this app. */
+private fun requestOverlay(context: Context) {
+    openOrExplain(
+        context,
+        Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${context.packageName}")),
+        "Settings → Apps → Special app access → Display over other apps",
+    )
+}
+
+/**
+ * Android 11's per-app "Pause app activity if unused" switch. The action exists from API 30;
+ * App info is the fallback because the switch also sits on that page.
+ */
+private fun requestHibernationExemption(context: Context) {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
+    val intent = Intent(Intent.ACTION_AUTO_REVOKE_PERMISSIONS, Uri.parse("package:${context.packageName}"))
     try {
         context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     } catch (e: ActivityNotFoundException) {

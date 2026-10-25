@@ -21,6 +21,24 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CalendarMonth
@@ -28,9 +46,6 @@ import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Today
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -132,6 +147,13 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Retries a keep-alive start Android refused while the app was in the background; see
+        // BlockApplication.onAppForeground.
+        (application as BlockApplication).onAppForeground()
     }
 }
 
@@ -276,31 +298,65 @@ private fun Screen.depth(): Int = when (this) {
     else -> 1
 }
 
+/**
+ * The three tabs. Drawn by hand rather than with Material's NavigationBar: the selected tab is a
+ * Lime pill carrying its label, the others are icons with a quiet label under them, which reads
+ * as one control at a glance rather than three equal buttons. The pill's width change is a
+ * finite animation, so it's fine under the Motion.kt rule.
+ */
 @Composable
 private fun BottomBar(current: Screen, onSelect: (Screen) -> Unit) {
-    NavigationBar(
-        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-        tonalElevation = 0.dp,
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surfaceContainerLow),
     ) {
-        Tabs.forEach { tab ->
-            val (label, icon) = when (tab) {
-                is Screen.History -> "History" to Icons.Outlined.CalendarMonth
-                Screen.Settings -> "Settings" to Icons.Outlined.Settings
-                else -> "Today" to Icons.Outlined.Today
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .height(BAR_HEIGHT)
+                .padding(horizontal = 12.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Tabs.forEach { tab ->
+                val (label, icon) = when (tab) {
+                    is Screen.History -> "History" to Icons.Outlined.CalendarMonth
+                    Screen.Settings -> "Settings" to Icons.Outlined.Settings
+                    else -> "Today" to Icons.Outlined.Today
+                }
+                val selected = current::class == tab::class
+                val fill by animateColorAsState(
+                    if (selected) MaterialTheme.colorScheme.primary else Color.Transparent,
+                    tween(TAB_FADE_MS),
+                    label = "tab",
+                )
+                Row(
+                    Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(fill)
+                        .clickable(onClickLabel = label) { onSelect(tab) }
+                        .animateContentSize()
+                        .padding(horizontal = if (selected) 18.dp else 14.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        icon,
+                        contentDescription = if (selected) null else label,
+                        tint = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(22.dp),
+                    )
+                    if (selected) {
+                        Spacer(Modifier.width(8.dp))
+                        Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onPrimary)
+                    }
+                }
             }
-            NavigationBarItem(
-                selected = current::class == tab::class,
-                onClick = { onSelect(tab) },
-                icon = { Icon(icon, contentDescription = null) },
-                label = { Text(label, style = MaterialTheme.typography.labelMedium) },
-                colors = NavigationBarItemDefaults.colors(
-                    selectedIconColor = MaterialTheme.colorScheme.onPrimary,
-                    selectedTextColor = MaterialTheme.colorScheme.onSurface,
-                    indicatorColor = MaterialTheme.colorScheme.primary,
-                    unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                    unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                ),
-            )
         }
     }
 }
+
+private val BAR_HEIGHT = 68.dp
+private const val TAB_FADE_MS = 180

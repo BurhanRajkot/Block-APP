@@ -195,7 +195,18 @@ start (deferred 4s), on Home resume, from the daily `UsageArchiveReceiver` alarm
 midnight from the service. Stopping the plan and narrowing reel-free hours, including by
 retaking the quiz, take effect *tomorrow*. Otherwise "retake the quiz with gentler answers"
 would be an in-app off switch. The plan lives in SharedPreferences (`reel_plan`), like
-`ReelLimit`.
+`ReelLimit`, including the user's own reason (`why`, read back on the reel wall) and their
+alternatives. Steps are a geometric curve (each week keeps `Goal.weeklyKeep` of the last), and
+the number of weeks comes from the pace, not a fixed table.
+
+**The plan's scorekeeping** is `util/PlanProgress`, pure, over `reel_counts` plus `plan_days`
+(schema v5, `PlanDayEntity`): each day's limit as it stood, how many times Tier 3 closed a viewer
+(limit vs reel-free hours), and whether the service ran that day (`tracked`). A *clean* day is
+within the limit with no wall at all, because the wall makes "under the limit" near-automatic. An
+untracked day is `NO_DATA`: it never extends or breaks a streak and adds nothing to "reels
+skipped". Today is never scored. The service writes `tracked` on connect and at midnight,
+`ReelPlan.refresh` writes the day's limit, `enforceReelLimit` records each wall. `PlanScreen`,
+Home's plan card and the reel wall all read `BlockRepository.observePlanProgress`.
 
 `ReelBubble` is its on-screen half: a tiny `TYPE_ACCESSIBILITY_OVERLAY` pill beside the camera
 cutout showing today's total. It is shown for exactly as long as the tracker has a session open.
@@ -224,6 +235,31 @@ backup service. The app still has no network permission (invariant 8).
 stream rather than reading `queryUsageStats` buckets. The buckets overlap the requested range,
 which inflated "today", and can't be split by hour. It needs Usage access, and every screen
 that shows it degrades to a grant prompt without it.
+
+**"Switched on" is not "running".** `accessibility/ServiceState` is a process-local flag the
+service sets in `onServiceConnected` and clears on unbind/destroy. Settings.Secure keeps the
+switch on over a crashed service (Samsung: "Not working"), so the UI reads protection through
+`ui/rememberProtection`: RUNNING, STARTING (switch on, not bound yet, a 4s grace for cold
+starts), NOT_RUNNING (needs the switch cycled; setup walks it) or OFF. `isAccessibilityActive`
+reads both the Secure string and `AccessibilityManager`'s enabled list, since some OEM builds
+format the former differently.
+
+**Crash-proofing the service is load-bearing.** A crash anywhere in the process kills the
+accessibility service and leaves the switch on, which reads to the user as "the app says not
+protected and keeps crashing". So: `onAccessibilityEvent` runs inside one guard, reel-tracking
+setup is guarded separately from the lock watchdog, posted wall starts are guarded,
+`applicationScope` has a `CoroutineExceptionHandler`, and `BlockGuardService.start` returns false
+instead of throwing when Android 12+ refuses a background foreground-service start
+(`BlockApplication.onAppForeground` retries from MainActivity / BlockOverlayActivity resume).
+`util/CrashLog` keeps the last crash in `filesDir` and Settings shows it with a copy button, since
+there is no crash reporter.
+
+**OEM background killers** (`admin/OemBackground`): Samsung, Xiaomi, Oppo/Realme/OnePlus, Vivo,
+Huawei/Honor each get explicit-component deep links to their own autostart / sleeping-apps
+screens, tried in order, ending on App info. They can't be read, so the user ticks them off
+(keyed to `firstInstallTime`). None of their activity names may match a Tier 1 class hint.
+`SYSTEM_ALERT_WINDOW` is declared as an optional extra purely for its exemption from background
+activity/FGS start limits; nothing is drawn with it.
 
 **The only sanctioned way out** is `RemoveProtectionScreen`, which calls
 `DeviceAdminHelper.removeAdmin()` in-process — an app may always drop its own admin without
@@ -287,7 +323,7 @@ Ordered by how bad it is to get wrong. The first one can force a factory reset.
    can start and stop the service faster than Android's start-up handshake completes, which kills
    the whole process with `ForegroundServiceDidNotStartInTimeException`. This was hit in practice
    at cold start when a stale expired lock flipped the flow non-empty→empty within milliseconds.
-7. **A Room schema change needs a version bump and a migration.** `AppDatabase` is `version = 4`
+7. **A Room schema change needs a version bump and a migration.** `AppDatabase` is `version = 5`
    with `exportSchema = false` and **no** `fallbackToDestructiveMigration()`, so shipping a changed
    schema without a migration throws at open — and on this app, a DB that won't open means
    `activeLocks` never populates and enforcement silently stops. Migrations are hand-written SQL;
@@ -321,6 +357,11 @@ cross-references to other files in prose — this codebase leans on them heavily
 holding one: `DeviceAdminHelper`, `AlarmScheduler`, `KeyVerifier`, `ProtectedPackages`,
 `InstalledAppsProvider`, `UsageStatsProvider`. Don't add a class with an injected `Context` for
 this kind of helper.
+
+**Type.** Two bundled variable fonts in `res/font` (OFL): Bricolage Grotesque for figures and
+headings (`DisplayFamily` at a display optical size, `HeadingFamily` at a text one, width 92) and
+Manrope for everything read. Keep tracking near zero on Bricolage; the platform sans's tight
+negative tracking ran its letters together. No downloadable-fonts provider (invariant 8).
 
 **UI look.** Dark-only on purpose (`ui/theme/Color.kt`): neutral graphite surfaces (`Ink*`),
 text in `Bone*`, Lime (`primary`, with `LimeInk` on it) for anything the user does, and Ember
@@ -438,7 +479,10 @@ than an emulator. Worth walking through for enforcement changes:
 - Confirm `RemoveProtectionScreen` still deactivates admin and returns control.
 - Apply an unlock key, then apply the same key again — the second attempt must be rejected as
   already used.
-- Upgrade over a v3 install (not a fresh one): the DB must open, locks and reel counts intact.
+- Upgrade over a v4 install (1.2, not a fresh one): the DB must open at v5 with `plan_days`,
+  locks and reel counts intact. (Done on the emulator for 1.3.)
+- With a lock running, kill the process with the screen off: it must come back without
+  crashing, and `adb logcat -s BlockGuardService` shows whether the keep-alive start was refused.
 - With reel-free hours covering now, open a reel viewer: BACK plus the "Reel-free hours" wall.
   With the limit at 0 ("No reels"), the first reel should do the same.
 - Retake the quiz with gentler answers: today's limit and reel-free hours must not loosen.

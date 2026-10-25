@@ -5,11 +5,14 @@ import android.database.sqlite.SQLiteException
 import androidx.room.withTransaction
 import com.blockapp.android.alarm.AlarmScheduler
 import com.blockapp.android.usage.DayUsage
+import com.blockapp.android.util.PlanProgress
 import com.blockapp.android.util.ProtectedPackages
+import com.blockapp.android.util.ReelPlan
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
@@ -167,6 +170,50 @@ class BlockRepository(
         }
         return true
     }
+
+    // ── reel plan days (schema v5) ──────────────────────────────────────────────────────────
+
+    /**
+     * Notes today's limit, and that the service is running today when [tracked]. Called by the
+     * service when it connects and at every midnight, and by ReelPlan.refresh whenever it may
+     * have changed the limit. Fire-and-forget and dropped on failure, like [addReelsWatched].
+     */
+    fun recordPlanDay(limit: Int?, tracked: Boolean) {
+        val day = LocalDate.now().toString()
+        scope.launch {
+            try {
+                dao.insertPlanDayIfAbsent(PlanDayEntity(day))
+                dao.setPlanDayLimit(day, limit ?: PlanDayEntity.NO_LIMIT)
+                if (tracked) dao.markPlanDayTracked(day)
+            } catch (e: SQLiteException) {
+                // Dropped on purpose; see addReelsWatched.
+            }
+        }
+    }
+
+    /** One Tier 3 wall: the daily limit when [quiet] is false, reel-free hours when true. */
+    fun recordReelWall(quiet: Boolean, limit: Int?) {
+        val day = LocalDate.now().toString()
+        scope.launch {
+            try {
+                dao.insertPlanDayIfAbsent(PlanDayEntity(day, tracked = 1))
+                dao.setPlanDayLimit(day, limit ?: PlanDayEntity.NO_LIMIT)
+                dao.markPlanDayTracked(day)
+                dao.addPlanDayWalls(day, limitWalls = if (quiet) 0 else 1, quietWalls = if (quiet) 1 else 0)
+            } catch (e: SQLiteException) {
+                // Dropped on purpose; see addReelsWatched.
+            }
+        }
+    }
+
+    fun observePlanDays(from: LocalDate, to: LocalDate): Flow<List<PlanDayEntity>> =
+        dao.observePlanDays(from.toString(), to.toString())
+
+    /** The plan's scorecard from its first day to [today], re-emitted as either side changes. */
+    fun observePlanProgress(plan: ReelPlan.Plan, today: LocalDate): Flow<PlanProgress.Summary> =
+        combine(observeReelDays(plan.startDay, today), observePlanDays(plan.startDay, today)) { reels, records ->
+            PlanProgress.summarize(plan, today, PlanProgress.days(plan, today, reels, records))
+        }
 
     // ── history ─────────────────────────────────────────────────────────────────────────────
 

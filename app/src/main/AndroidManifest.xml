@@ -11,6 +11,11 @@
          at install time, and calling that API without it throws a SecurityException, which
          would silently break auto-expiry of a lock at its scheduled time. -->
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <!-- Optional, granted by the user under "Display over other apps". Nothing is drawn with it;
+         holding it exempts the app from Android's background limits on starting activities and
+         foreground services, which on Xiaomi and some other builds otherwise stop the block wall
+         appearing and crash-looped the keep-alive service (see BlockGuardService.start). -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission
         android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission" />

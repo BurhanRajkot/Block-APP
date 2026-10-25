@@ -66,6 +66,7 @@ import com.blockapp.android.ui.theme.Ink800
 import com.blockapp.android.ui.theme.Ink950
 import com.blockapp.android.ui.theme.Lime
 import com.blockapp.android.ui.theme.LimeInk
+import com.blockapp.android.util.ReelPlan
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -142,6 +143,13 @@ class BlockOverlayActivity : ComponentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        // The wall is in front, so this is a moment Android lets the keep-alive service start
+        // if it was refused in the background (see BlockApplication.onAppForeground).
+        (application as BlockApplication).onAppForeground()
+    }
+
     // singleTask + FLAG_ACTIVITY_CLEAR_TOP means a re-lock while this is already on screen
     // (e.g. the user taps the locked app again) delivers here instead of a fresh onCreate —
     // without this, the countdown would keep showing whatever blockUntil it started with.
@@ -191,6 +199,10 @@ private fun BlockOverlayContent(
     val app = context.applicationContext as BlockApplication
     val identity = remember(packageName) {
         if (packageName.isEmpty()) null else loadAppIdentity(context, packageName)
+    }
+    val why = remember(isReelWall) { if (isReelWall) ReelPlan.why(context) else null }
+    val alternatives = remember(isReelWall) {
+        if (isReelWall) ReelPlan.alternatives(context) else emptyList()
     }
 
     // Only needed to draw how far through the lock the user is, so the wall renders immediately
@@ -377,6 +389,27 @@ private fun BlockOverlayContent(
 
         Spacer(Modifier.height(20.dp))
 
+        // The reel wall reads the user's own reason back, and what they said they'd rather do:
+        // at the moment of the urge, their words land harder than any copy of ours.
+        if (isReelLimit && why != null) {
+            Text(
+                "“$why”",
+                style = MaterialTheme.typography.headlineSmall,
+                color = WallAccent,
+                textAlign = TextAlign.Center,
+            )
+            Spacer(Modifier.height(14.dp))
+        }
+        if (isReelLimit && alternatives.isNotEmpty()) {
+            Text(
+                "Instead: " + alternatives.take(MAX_ALTERNATIVES).joinToString(" · ") { it.title.lowercase() },
+                style = MaterialTheme.typography.bodyMedium,
+                color = Color.White.copy(alpha = 0.75f),
+                textAlign = TextAlign.Center,
+            )
+            Spacer(Modifier.height(14.dp))
+        }
+
         Box(
             modifier = Modifier
                 .clip(RoundedCornerShape(18.dp))
@@ -423,4 +456,7 @@ private fun BlockOverlayContent(
 private const val DIAL_SIZE_DP = 232
 
 private const val BREATH_MS = 2_400
+
+/** More than three alternatives stops fitting two lines at phone width. */
+private const val MAX_ALTERNATIVES = 3
 private const val SHAKE_MS = 380

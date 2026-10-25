@@ -7,9 +7,12 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import com.blockapp.android.MainActivity
 import com.blockapp.android.R
@@ -34,7 +37,26 @@ class BlockGuardService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startForeground(NOTIFICATION_ID, buildNotification())
+        // The type is passed explicitly on API 34, where a foreground service must name the
+        // type it was declared with. Guarded rather than trusted: if this throws, the process
+        // goes with it, and the accessibility service and every running lock go too, over a
+        // keep-alive that is only ever a help (invariant 9). The service is not stopped on
+        // failure: stopping one started with startForegroundService before it reached
+        // startForeground is itself a crash ("did not then call startForeground").
+        try {
+            ServiceCompat.startForeground(
+                this,
+                NOTIFICATION_ID,
+                buildNotification(),
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                } else {
+                    0
+                },
+            )
+        } catch (e: RuntimeException) {
+            Log.w(TAG, "startForeground refused", e)
+        }
         return START_STICKY
     }
 
@@ -72,12 +94,38 @@ class BlockGuardService : Service() {
         private const val CHANNEL_ID = "block_guard"
         private const val NOTIFICATION_ID = 1
 
-        fun start(context: Context) {
+        private const val TAG = "BlockGuardService"
+
+        /**
+         * Returns false when Android refused the start, and never throws.
+         *
+         * Refusal is normal, not an edge case. From Android 12 a foreground service can't be
+         * started while the app is in the background, and this app is started in the background
+         * all the time: the system rebinds the accessibility service after killing the process,
+         * and that cold start finds a running lock and lands here. The refusal is an
+         * IllegalStateException (ForegroundServiceStartNotAllowedException), and uncaught it
+         * crashed the whole process on every such restart. The accessibility service died with
+         * it, so Settings still showed the switch on while nothing was blocked and the app
+         * read "not protected": the crash a real phone hit. BlockApplication retries once the
+         * app is in front again.
+         */
+        fun start(context: Context): Boolean = try {
             ContextCompat.startForegroundService(context, Intent(context, BlockGuardService::class.java))
+            true
+        } catch (e: IllegalStateException) {
+            Log.w(TAG, "foreground service start not allowed now", e)
+            false
+        } catch (e: SecurityException) {
+            Log.w(TAG, "foreground service start refused", e)
+            false
         }
 
         fun stop(context: Context) {
-            context.stopService(Intent(context, BlockGuardService::class.java))
+            try {
+                context.stopService(Intent(context, BlockGuardService::class.java))
+            } catch (e: RuntimeException) {
+                Log.w(TAG, "stop failed", e)
+            }
         }
     }
 }

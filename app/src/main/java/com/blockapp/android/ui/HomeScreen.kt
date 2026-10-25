@@ -24,6 +24,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.outlined.Bedtime
+import androidx.compose.material.icons.outlined.LocalFireDepartment
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -50,7 +51,6 @@ import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import com.blockapp.android.BlockApplication
-import com.blockapp.android.admin.DeviceAdminHelper
 import com.blockapp.android.data.BlockedAppEntity
 import com.blockapp.android.data.ReelCountEntity
 import com.blockapp.android.data.ReelDayTotal
@@ -60,6 +60,7 @@ import com.blockapp.android.ui.theme.Lime
 import com.blockapp.android.ui.theme.StatusColors
 import com.blockapp.android.usage.DayUsage
 import com.blockapp.android.usage.UsageStatsProvider
+import com.blockapp.android.util.PlanProgress
 import com.blockapp.android.util.ReelLimit
 import com.blockapp.android.util.ReelPlan
 import kotlinx.coroutines.CancellationException
@@ -98,8 +99,7 @@ fun HomeScreen(
     val context = LocalContext.current
     val app = context.applicationContext as BlockApplication
     var locks by remember { mutableStateOf<List<BlockedAppEntity>>(emptyList()) }
-    var isAdminActive by remember { mutableStateOf(true) }
-    var isAccessibilityActive by remember { mutableStateOf(true) }
+    val protection = rememberProtection()
     var hasUsageAccess by remember { mutableStateOf(true) }
     var reelCounts by remember { mutableStateOf<List<ReelCountEntity>>(emptyList()) }
     var week by remember { mutableStateOf<List<ReelDayTotal>>(emptyList()) }
@@ -134,8 +134,6 @@ fun HomeScreen(
     // Settings, so a one-shot LaunchedEffect(Unit) would never see the updated state —
     // ON_RESUME is what actually fires when the user comes back.
     LifecycleResumeEffect(Unit) {
-        isAdminActive = DeviceAdminHelper.isAdminActive(context)
-        isAccessibilityActive = DeviceAdminHelper.isAccessibilityActive(context)
         hasUsageAccess = UsageStatsProvider.hasUsageAccess(context)
         // One-shot sweep, not a poll: catches a lock whose expiry alarm was missed (see
         // BlockApplication's cold-start sweep for why that can happen) every time the user
@@ -185,6 +183,16 @@ fun HomeScreen(
         }
     }
 
+    var progress by remember { mutableStateOf<PlanProgress.Summary?>(null) }
+    LaunchedEffect(plan, today) {
+        val running = plan
+        if (running == null) {
+            progress = null
+            return@LaunchedEffect
+        }
+        app.repository.observePlanProgress(running, today).collectLatest { progress = it }
+    }
+
     if (editingLimit) {
         ReelLimitDialog(
             onDismiss = { editingLimit = false },
@@ -195,7 +203,7 @@ fun HomeScreen(
         )
     }
 
-    val isProtected = isAdminActive && isAccessibilityActive
+    val isProtected = protection.isProtected
     val reelsByPackage = remember(reelCounts) { reelCounts.associate { it.packageName to it.reels } }
     val lockedPackages = remember(locks) { locks.map { it.packageName }.toSet() }
 
@@ -210,11 +218,7 @@ fun HomeScreen(
             if (!isProtected) {
                 item(key = "setup") {
                     Reveal(1) {
-                        SetupWarning(
-                            isAdminActive = isAdminActive,
-                            isAccessibilityActive = isAccessibilityActive,
-                            onFix = onFixSetup,
-                        )
+                        SetupWarning(protection = protection, onFix = onFixSetup)
                     }
                     Spacer(Modifier.height(12.dp))
                 }
@@ -223,9 +227,11 @@ fun HomeScreen(
                 Reveal(2) {
                     ReelHero(
                         counts = reelCounts,
-                        isCounting = isAccessibilityActive,
+                        isCounting = protection.accessibility == AccessibilityUi.RUNNING ||
+                            protection.accessibility == AccessibilityUi.STARTING,
                         limit = reelLimit,
                         plan = plan,
+                        progress = progress,
                         quiet = quiet,
                         today = today,
                         onOpen = { onHistory(today) },
@@ -343,22 +349,33 @@ private fun greeting(): String = when (LocalTime.now().hour) {
 }
 
 @Composable
-private fun SetupWarning(isAdminActive: Boolean, isAccessibilityActive: Boolean, onFix: () -> Unit) {
+private fun SetupWarning(protection: Protection, onFix: () -> Unit) {
     Panel(color = StatusColors.Danger.copy(alpha = 0.12f), onClick = onFix) {
         Text(
-            "Blocking isn't fully on",
+            if (protection.accessibility == AccessibilityUi.NOT_RUNNING) {
+                "Blocking has stopped"
+            } else {
+                "Blocking isn't fully on"
+            },
             style = MaterialTheme.typography.titleMedium,
             color = StatusColors.Danger,
         )
         Spacer(Modifier.height(4.dp))
-        if (!isAccessibilityActive) {
-            Text(
+        when (protection.accessibility) {
+            AccessibilityUi.OFF -> Text(
                 "Accessibility is off, so locked apps still open and reels aren't counted.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurface,
             )
+            AccessibilityUi.NOT_RUNNING -> Text(
+                "Accessibility is switched on, but Android isn't running App Blocker's service. " +
+                    "Turning the switch off and on again restarts it.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            else -> Unit
         }
-        if (!isAdminActive) {
+        if (!protection.admin) {
             Text(
                 "Device Admin is off, so the app can be uninstalled mid-lock.",
                 style = MaterialTheme.typography.bodyMedium,
@@ -381,6 +398,7 @@ private fun ReelHero(
     isCounting: Boolean,
     limit: Int?,
     plan: ReelPlan.Plan?,
+    progress: PlanProgress.Summary?,
     quiet: ReelPlan.QuietHours?,
     today: LocalDate,
     onOpen: () -> Unit,
@@ -468,7 +486,7 @@ private fun ReelHero(
         }
 
         Spacer(Modifier.height(16.dp))
-        PlanStrip(plan = plan, today = today, onClick = onPlan)
+        PlanStrip(plan = plan, progress = progress, today = today, onClick = onPlan)
 
         if (counts.isNotEmpty()) {
             Spacer(Modifier.height(14.dp))
@@ -511,42 +529,70 @@ private fun QuietChip(quiet: ReelPlan.QuietHours, now: Boolean) {
     }
 }
 
-/** The plan's progress in one tappable line, or an invitation to build one. */
+/**
+ * The plan in one tappable block: phase, day, the clean-day streak and the last week of
+ * outcomes, or an invitation to build one. The full scorecard is on PlanScreen.
+ */
 @Composable
-private fun PlanStrip(plan: ReelPlan.Plan?, today: LocalDate, onClick: () -> Unit) {
-    Row(
+private fun PlanStrip(plan: ReelPlan.Plan?, progress: PlanProgress.Summary?, today: LocalDate, onClick: () -> Unit) {
+    Column(
         Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
             .background(MaterialTheme.colorScheme.surfaceContainerHigh)
             .clickable(onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(Modifier.weight(1f)) {
-            if (plan == null) {
-                Text("Build a reel plan", style = MaterialTheme.typography.titleSmall)
-                Text(
-                    "Five questions, then a limit that steps down each week",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            } else {
-                val week = plan.weekOf(today)
-                Text(
-                    "Week ${week + 1} of ${plan.weeks} · ${plan.goal.title}",
-                    style = MaterialTheme.typography.titleSmall,
-                )
-                Spacer(Modifier.height(6.dp))
-                Meter((week + 1) / plan.weeks.toFloat(), Lime, height = 4.dp)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                if (plan == null) {
+                    Text("Build a reel plan", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        "A few questions, then a limit that steps down each week",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    val week = plan.weekOf(today)
+                    Text(
+                        "${progress?.phase?.title ?: plan.goal.title} · week ${week + 1} of ${plan.weeks}",
+                        style = MaterialTheme.typography.titleSmall,
+                    )
+                    val streak = progress?.streak ?: 0
+                    Text(
+                        when {
+                            streak > 0 -> "$streak clean ${if (streak == 1) "day" else "days"} in a row"
+                            progress != null && progress.scoredDays > 0 -> "Stop before the wall today to start a streak"
+                            else -> "Your first day. Stop before the wall to make it a clean one"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
+            if (progress != null && progress.streak > 0) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Outlined.LocalFireDepartment,
+                        contentDescription = null,
+                        tint = Lime,
+                        modifier = Modifier.width(18.dp),
+                    )
+                    Spacer(Modifier.width(2.dp))
+                    Text("${progress.streak}", style = MaterialTheme.typography.titleLarge, color = Lime)
+                }
+                Spacer(Modifier.width(6.dp))
+            }
+            Icon(
+                Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
-        Spacer(Modifier.width(8.dp))
-        Icon(
-            Icons.AutoMirrored.Filled.KeyboardArrowRight,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        if (progress != null) {
+            Spacer(Modifier.height(12.dp))
+            DayStrip(progress.days, count = 7)
+        }
     }
 }
 

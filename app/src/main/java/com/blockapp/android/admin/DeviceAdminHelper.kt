@@ -1,5 +1,6 @@
 package com.blockapp.android.admin
 
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.app.admin.DevicePolicyManager
 import android.app.AlarmManager
 import android.content.ComponentName
@@ -8,7 +9,10 @@ import android.content.Intent
 import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
+import android.view.accessibility.AccessibilityManager
 import androidx.core.app.NotificationManagerCompat
+import com.blockapp.android.accessibility.AppBlockAccessibilityService
+import com.blockapp.android.accessibility.ServiceState
 
 /**
  * Single place the app asks "is capability X currently granted?". Despite the name it covers
@@ -65,19 +69,90 @@ object DeviceAdminHelper {
         dpm.removeActiveAdmin(adminComponent(context))
     }
 
-    fun isAccessibilityActive(context: Context): Boolean {
-        val enabledServices = Settings.Secure.getString(
-            context.contentResolver,
-            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
-        ) ?: return false
-        val component = ComponentName(
-            context,
-            com.blockapp.android.accessibility.AppBlockAccessibilityService::class.java,
-        )
-        // Android stores entries as either "pkg/pkg.Class" or shorthand "pkg/.Class" —
-        // ComponentName.unflattenFromString() normalizes both before comparing.
-        return enabledServices.split(":").any { raw ->
-            ComponentName.unflattenFromString(raw) == component
+    /** The three states the Accessibility step can be in. See ServiceState for why it's three. */
+    enum class AccessibilityState {
+        /** Switched off in Settings. */
+        OFF,
+
+        /**
+         * Switched on in Settings, but the service isn't running in this process. Right after a
+         * process start this is normal for a moment, until the system rebinds. If it lasts, the
+         * service crashed or was stopped, and the switch has to be turned off and on again.
+         */
+        ON_NOT_RUNNING,
+
+        RUNNING,
+    }
+
+    fun accessibilityState(context: Context): AccessibilityState = when {
+        ServiceState.connected.value -> AccessibilityState.RUNNING
+        isAccessibilityEnabledInSettings(context) -> AccessibilityState.ON_NOT_RUNNING
+        else -> AccessibilityState.OFF
+    }
+
+    /**
+     * Whether the switch is on (or the service is running, which proves it). What setup gates
+     * on: a switched-on service that isn't running yet needs a different fix, not the same
+     * step again. See [accessibilityState] for telling those apart.
+     */
+    fun isAccessibilityActive(context: Context): Boolean =
+        ServiceState.connected.value || isAccessibilityEnabledInSettings(context)
+
+    /**
+     * Two sources, either one enough. The Secure string is what AOSP Settings writes, but it is
+     * a raw setting some OEM builds format their own way and some guard behind restricted
+     * reads, and on those the app said "Accessibility is off" for a switch the user could see
+     * was on. AccessibilityManager's enabled list is the framework's own view of the same
+     * switch, so an entry in either one counts.
+     */
+    private fun isAccessibilityEnabledInSettings(context: Context): Boolean {
+        val component = ComponentName(context, AppBlockAccessibilityService::class.java)
+        val fromSecure = try {
+            Settings.Secure.getString(
+                context.contentResolver,
+                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
+            )
+                ?.split(':')
+                // Android stores entries as either "pkg/pkg.Class" or shorthand "pkg/.Class";
+                // ComponentName.unflattenFromString() normalizes both before comparing.
+                ?.any { raw -> ComponentName.unflattenFromString(raw.trim()) == component }
+                ?: false
+        } catch (e: RuntimeException) {
+            false
+        }
+        if (fromSecure) return true
+        return try {
+            val manager = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as AccessibilityManager
+            manager.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
+                .any { info ->
+                    val service = info.resolveInfo?.serviceInfo ?: return@any false
+                    service.packageName == component.packageName && service.name == component.className
+                }
+        } catch (e: RuntimeException) {
+            false
+        }
+    }
+
+    /**
+     * "Display over other apps". Nothing is drawn with it (ReelBubble is an accessibility
+     * overlay and needs none), but holding it is one of Android's exemptions from the
+     * background start limits on activities and foreground services. On Xiaomi and some other
+     * builds those limits otherwise stop the block wall appearing after a bounce home.
+     */
+    fun canDrawOverlays(context: Context): Boolean = Settings.canDrawOverlays(context)
+
+    /**
+     * Whether Android 11+'s "Pause app activity if unused" (also "Remove permissions if app is
+     * unused") is off for this app. It strips Accessibility's companion permissions and puts
+     * the app to sleep after a few months untouched, which for a blocker used mostly through
+     * its walls is a real risk. Below API 30 the feature doesn't exist.
+     */
+    fun isExemptFromHibernation(context: Context): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return true
+        return try {
+            context.packageManager.isAutoRevokeWhitelisted
+        } catch (e: RuntimeException) {
+            true
         }
     }
 

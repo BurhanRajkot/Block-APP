@@ -102,4 +102,24 @@ interface BlockDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertUsageApps(entities: List<UsageAppEntity>)
+
+    // ── reel plan days (schema v5) ──────────────────────────────────────────────────────────
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertPlanDayIfAbsent(entity: PlanDayEntity)
+
+    @Query("UPDATE plan_days SET limitReels = :limit WHERE day = :day")
+    suspend fun setPlanDayLimit(day: String, limit: Int)
+
+    @Query("UPDATE plan_days SET tracked = 1 WHERE day = :day")
+    suspend fun markPlanDayTracked(day: String)
+
+    @Query(
+        "UPDATE plan_days SET limitWalls = limitWalls + :limitWalls, " +
+            "quietWalls = quietWalls + :quietWalls WHERE day = :day",
+    )
+    suspend fun addPlanDayWalls(day: String, limitWalls: Int, quietWalls: Int)
+
+    @Query("SELECT * FROM plan_days WHERE day BETWEEN :fromDay AND :toDay ORDER BY day ASC")
+    fun observePlanDays(fromDay: String, toDay: String): Flow<List<PlanDayEntity>>
 }

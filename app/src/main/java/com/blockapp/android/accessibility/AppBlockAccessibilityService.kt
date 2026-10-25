@@ -13,6 +13,7 @@ import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.inputmethod.InputMethodManager
 import android.widget.Toast
+import androidx.annotation.RequiresApi
 import androidx.core.content.ContextCompat
 import com.blockapp.android.BlockApplication
 import com.blockapp.android.R
@@ -110,6 +111,10 @@ class AppBlockAccessibilityService : AccessibilityService() {
     private val showReelLimitWall = Runnable {
         val wall = pendingLimitWall ?: return@Runnable
         pendingLimitWall = null
+        runCatching { startReelWall(wall) }.onFailure { Log.w(TAG, "reel wall refused", it) }
+    }
+
+    private fun startReelWall(wall: ReelWall) {
         startActivity(
             Intent(this, BlockOverlayActivity::class.java).apply {
                 addFlags(
@@ -161,11 +166,18 @@ class AppBlockAccessibilityService : AccessibilityService() {
      */
     override fun onServiceConnected() {
         super.onServiceConnected()
+        ServiceState.markConnected(true)
         val app = application as BlockApplication
-        val currentPackage = rootInActiveWindow?.packageName?.toString()
-        if (currentPackage != null) {
-            val blockUntil = runBlocking { app.repository.getActiveLockUntil(currentPackage) }
-            if (blockUntil != null) kickToHome(currentPackage, blockUntil)
+        try {
+            val currentPackage = rootInActiveWindow?.packageName?.toString()
+            if (currentPackage != null) {
+                val blockUntil = runBlocking { app.repository.getActiveLockUntil(currentPackage) }
+                if (blockUntil != null) kickToHome(currentPackage, blockUntil)
+            }
+        } catch (e: RuntimeException) {
+            // The watchdog below catches the same app a tick later; a failed first look must not
+            // stop the service from finishing its setup.
+            Log.w(TAG, "reconnect check failed", e)
         }
 
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -174,62 +186,16 @@ class AppBlockAccessibilityService : AccessibilityService() {
         // The tracker needs scrollDeltaY, which AccessibilityEvent only gained in API 28 (P).
         // Below that the counter simply stays at zero, and HomeScreen says why.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            val bubble = ReelBubble(this, app.repository, scope) { ReelLimit.todayLimit(this) }
-            reelBubble = bubble
-            bubbleTransientPackages = bubbleTransientPackages()
-            reelTracker = ReelTracker(
-                service = this,
-                handler = handler,
-                // An allowlist, not a blocklist: see ReelApps.KNOWN for the browser images that
-                // were counted as reels when every app was watched.
-                trackedPackages = ReelApps.KNOWN,
-                listener = object : ReelTracker.Listener {
-                    override fun onReelsWatched(packageName: String, count: Int, watchMs: Long) {
-                        app.repository.addReelsWatched(packageName, count, watchMs)
-                    }
-
-                    override fun onSessionStarted(packageName: String) {
-                        reelSessionPackage = packageName
-                        bubble.show(packageName)
-                        enforceReelLimit()
-                    }
-
-                    override fun onSessionEnded(packageName: String) {
-                        reelSessionPackage = null
-                        bubble.hide()
-                    }
-                },
-            )
-            // Not exported: screen-off is a system broadcast, which reaches a not-exported
-            // receiver anyway, and nothing else should be able to end a session.
-            ContextCompat.registerReceiver(
-                this,
-                screenOffReceiver,
-                IntentFilter(Intent.ACTION_SCREEN_OFF),
-                ContextCompat.RECEIVER_NOT_EXPORTED,
-            )
-            screenOffRegistered = true
-
-            // Today's total, re-keyed at midnight so the limit resets with the day.
-            scope.launch {
-                todayTicker()
-                    .flatMapLatest { day -> app.repository.observeReelTotal(day) }
-                    .collect { total -> onReelTotal(total) }
-            }
-            // The reel plan's next step, applied the moment the day turns, so a new week's
-            // lower limit doesn't wait for the app to be opened. The process-start and daily
-            // alarm runs cover the rest (see ReelPlan.refresh).
-            scope.launch {
-                todayTicker().collect {
-                    try {
-                        ReelPlan.refresh(this@AppBlockAccessibilityService, app.repository)
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: RuntimeException) {
-                        // A plan step is not worth the service (invariant 9).
-                        Log.w("ReelPlan", "refresh failed", e)
-                    }
-                }
+            // Reel counting is an extra, blocking is the point. A failure setting up the tracker
+            // (an OEM WindowManager refusing the bubble, a missing system service) used to throw
+            // out of onServiceConnected, which crashed the service before the lock watchdog
+            // below was ever started.
+            try {
+                connectReelTracking(app, scope)
+            } catch (e: RuntimeException) {
+                Log.w(TAG, "reel tracking unavailable", e)
+                reelTracker = null
+                reelBubble = null
             }
         }
         scope.launch {
@@ -247,7 +213,80 @@ class AppBlockAccessibilityService : AccessibilityService() {
         }
     }
 
+    @RequiresApi(Build.VERSION_CODES.P)
+    private fun connectReelTracking(app: BlockApplication, scope: CoroutineScope) {
+        val bubble = ReelBubble(this, app.repository, scope) { ReelLimit.todayLimit(this) }
+        reelBubble = bubble
+        bubbleTransientPackages = bubbleTransientPackages()
+        reelTracker = ReelTracker(
+            service = this,
+            handler = handler,
+            // An allowlist, not a blocklist: see ReelApps.KNOWN for the browser images that
+            // were counted as reels when every app was watched.
+            trackedPackages = ReelApps.KNOWN,
+            listener = object : ReelTracker.Listener {
+                override fun onReelsWatched(packageName: String, count: Int, watchMs: Long) {
+                    app.repository.addReelsWatched(packageName, count, watchMs)
+                }
+
+                override fun onSessionStarted(packageName: String) {
+                    reelSessionPackage = packageName
+                    bubble.show(packageName)
+                    enforceReelLimit()
+                }
+
+                override fun onSessionEnded(packageName: String) {
+                    reelSessionPackage = null
+                    bubble.hide()
+                }
+            },
+        )
+        // Not exported: screen-off is a system broadcast, which reaches a not-exported
+        // receiver anyway, and nothing else should be able to end a session.
+        ContextCompat.registerReceiver(
+            this,
+            screenOffReceiver,
+            IntentFilter(Intent.ACTION_SCREEN_OFF),
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
+        screenOffRegistered = true
+
+        // Today's total, re-keyed at midnight so the limit resets with the day.
+        scope.launch {
+            todayTicker()
+                .flatMapLatest { day -> app.repository.observeReelTotal(day) }
+                .collect { total -> onReelTotal(total) }
+        }
+        // The reel plan's next step, applied the moment the day turns, so a new week's
+        // lower limit doesn't wait for the app to be opened. The process-start and daily
+        // alarm runs cover the rest (see ReelPlan.refresh).
+        scope.launch {
+            todayTicker().collect {
+                try {
+                    ReelPlan.refresh(this@AppBlockAccessibilityService, app.repository)
+                    // Marks today as one the counter was watching, so a day with no reels
+                    // reads as reel-free rather than as no data (see PlanDayEntity.tracked).
+                    app.repository.recordPlanDay(
+                        ReelLimit.todayLimit(this@AppBlockAccessibilityService),
+                        tracked = true,
+                    )
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: RuntimeException) {
+                    // A plan step is not worth the service (invariant 9).
+                    Log.w("ReelPlan", "refresh failed", e)
+                }
+            }
+        }
+    }
+
+    override fun onDestroy() {
+        ServiceState.markConnected(false)
+        super.onDestroy()
+    }
+
     override fun onUnbind(intent: Intent?): Boolean {
+        ServiceState.markConnected(false)
         handler.removeCallbacks(watchdog)
         handler.removeCallbacks(showOverlay)
         handler.removeCallbacks(showReelLimitWall)
@@ -261,14 +300,28 @@ class AppBlockAccessibilityService : AccessibilityService() {
         reelBubble = null
         if (screenOffRegistered) {
             screenOffRegistered = false
-            unregisterReceiver(screenOffReceiver)
+            runCatching { unregisterReceiver(screenOffReceiver) }
         }
         serviceScope?.cancel()
         serviceScope = null
         return super.onUnbind(intent)
     }
 
+    /**
+     * Everything an event leads to runs inside one guard. An exception escaping here crashes the
+     * service, and with it the whole process: enforcement stops, Settings keeps showing the
+     * switch on (Samsung adds "Not working"), and the app looks broken. One bad event from one
+     * app's odd window tree must cost that event, not the service.
+     */
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        try {
+            handleEvent(event)
+        } catch (e: RuntimeException) {
+            Log.w(TAG, "event dropped", e)
+        }
+    }
+
+    private fun handleEvent(event: AccessibilityEvent?) {
         when (event?.eventType) {
             AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) reelTracker?.onScrolled(event)
@@ -406,7 +459,9 @@ class AppBlockAccessibilityService : AccessibilityService() {
             putExtra(BlockOverlayActivity.EXTRA_PACKAGE_NAME, packageName)
             putExtra(BlockOverlayActivity.EXTRA_BLOCK_UNTIL, blockUntil)
         }
-        startActivity(overlayIntent)
+        // A posted Runnable is outside onAccessibilityEvent's guard. The bounce home has already
+        // happened by now, so a refused start loses the explanation, not the block.
+        runCatching { startActivity(overlayIntent) }.onFailure { Log.w(TAG, "wall refused", it) }
     }
 
     /**
@@ -452,6 +507,7 @@ class AppBlockAccessibilityService : AccessibilityService() {
         // One kick per burst: the session-start and total-changed paths often fire together.
         if (now - lastLimitKickAt < LIMIT_KICK_COOLDOWN_MS) return
         lastLimitKickAt = now
+        (application as BlockApplication).repository.recordReelWall(quiet = quiet != null, limit = limit)
         performGlobalAction(GLOBAL_ACTION_BACK)
         handler.removeCallbacks(showReelLimitWall)
         pendingLimitWall = wall
@@ -484,6 +540,8 @@ class AppBlockAccessibilityService : AccessibilityService() {
     override fun onInterrupt() {}
 
     private companion object {
+        const val TAG = "AppBlockService"
+
         /** How often the watchdog re-checks the foreground app against active locks. */
         const val WATCHDOG_INTERVAL_MS = 200L
 

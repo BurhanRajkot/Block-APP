@@ -7,8 +7,10 @@ import com.blockapp.android.data.AppDatabase
 import com.blockapp.android.data.BlockRepository
 import com.blockapp.android.service.BlockGuardService
 import com.blockapp.android.usage.UsageArchive
+import com.blockapp.android.util.CrashLog
 import com.blockapp.android.util.ReelPlan
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
@@ -22,13 +24,29 @@ import kotlinx.coroutines.launch
 @OptIn(FlowPreview::class)
 class BlockApplication : Application() {
 
-    val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    /**
+     * The handler is the backstop for invariant 9. Without one, any exception that escaped a
+     * coroutine here (a Room write on a full disk, a system service throwing on an OEM build)
+     * was an uncaught crash, and on this app a crash also takes down the accessibility service,
+     * so every running lock stops being enforced until the system rebinds it. The call sites
+     * still catch what they expect; this only catches what they didn't, and records it so it
+     * shows up in Settings instead of vanishing.
+     */
+    val applicationScope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Default + CoroutineExceptionHandler { _, error ->
+            CrashLog.recordNonFatal(this, "applicationScope", error)
+        },
+    )
+
+    /** Set when Android refused to start BlockGuardService; see [onAppForeground]. */
+    @Volatile private var guardStartRefused = false
 
     lateinit var repository: BlockRepository
         private set
 
     override fun onCreate() {
         super.onCreate()
+        CrashLog.install(this)
         repository = BlockRepository(
             context = applicationContext,
             database = AppDatabase.getInstance(this),
@@ -88,9 +106,29 @@ class BlockApplication : Application() {
         repository.activeLocks
             .debounce(SERVICE_TOGGLE_DEBOUNCE_MS)
             .onEach { locks ->
-                if (locks.isNotEmpty()) BlockGuardService.start(this) else BlockGuardService.stop(this)
+                if (locks.isNotEmpty()) {
+                    guardStartRefused = !BlockGuardService.start(this)
+                } else {
+                    guardStartRefused = false
+                    BlockGuardService.stop(this)
+                }
             }
             .launchIn(applicationScope)
+    }
+
+    /**
+     * Called by MainActivity and BlockOverlayActivity when they resume. A start refused while
+     * the app was in the background (see BlockGuardService.start) is retried here, the first
+     * moment Android allows it. Still only this class starts the service, from the same lock
+     * state the observer above uses, so the two can't disagree.
+     */
+    fun onAppForeground() {
+        if (!guardStartRefused) return
+        if (repository.activeLocks.value.isEmpty()) {
+            guardStartRefused = false
+            return
+        }
+        guardStartRefused = !BlockGuardService.start(this)
     }
 
     private companion object {

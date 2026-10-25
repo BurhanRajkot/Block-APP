@@ -1,6 +1,9 @@
 package com.blockapp.android.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
+import android.widget.Toast
 import android.content.pm.PackageManager
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
@@ -34,6 +37,7 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.WarningAmber
+import androidx.compose.material.icons.outlined.BugReport
 import androidx.compose.material.icons.outlined.Extension
 import androidx.compose.material.icons.outlined.HourglassBottom
 import androidx.compose.material.icons.outlined.CalendarMonth
@@ -55,12 +59,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.blockapp.android.admin.DeviceAdminHelper
 import com.blockapp.android.ui.theme.StatusColors
 import com.blockapp.android.usage.UsageStatsProvider
+import com.blockapp.android.util.CrashLog
 import com.blockapp.android.util.ReelLimit
 import com.blockapp.android.util.ReelPlan
 
@@ -85,12 +91,13 @@ fun SettingsScreen(
 ) {
     val context = LocalContext.current
 
-    var isAccessibilityActive  by remember { mutableStateOf(false) }
-    var isAdminActive          by remember { mutableStateOf(false) }
+    val protection = rememberProtection()
     var isBatteryUnrestricted  by remember { mutableStateOf(false) }
     var canScheduleExactAlarms by remember { mutableStateOf(false) }
     var hasNotifications       by remember { mutableStateOf(false) }
     var hasUsageAccess         by remember { mutableStateOf(false) }
+    var canDrawOverlays        by remember { mutableStateOf(false) }
+    var crashReport            by remember { mutableStateOf<String?>(null) }
     var showInstallNotes       by remember { mutableStateOf(false) }
     var versionTaps            by remember { mutableStateOf(0) }
     var reelLimit              by remember { mutableStateOf(ReelLimit.todayLimit(context)) }
@@ -101,21 +108,22 @@ fun SettingsScreen(
     // Every one of these can be revoked while the app sits in the background, so they're re-read
     // on resume rather than sampled once — same reason HomeScreen re-checks its banner state.
     LifecycleResumeEffect(Unit) {
-        isAccessibilityActive  = DeviceAdminHelper.isAccessibilityActive(context)
-        isAdminActive          = DeviceAdminHelper.isAdminActive(context)
         isBatteryUnrestricted  = DeviceAdminHelper.isIgnoringBatteryOptimizations(context)
         canScheduleExactAlarms = DeviceAdminHelper.canScheduleExactAlarms(context)
         hasNotifications       = DeviceAdminHelper.areNotificationsEnabled(context)
         hasUsageAccess         = UsageStatsProvider.hasUsageAccess(context)
+        canDrawOverlays        = DeviceAdminHelper.canDrawOverlays(context)
+        crashReport            = CrashLog.last(context)
         reelLimit              = ReelLimit.todayLimit(context)
         reelLimitPending       = ReelLimit.pending(context)
         reelPlan               = ReelPlan.current(context)
         onPauseOrDispose {}
     }
 
-    val isArmed = isAccessibilityActive && isAdminActive
+    val isArmed = protection.isProtected
     val extras = listOf(
         "Battery" to isBatteryUnrestricted,
+        "Over other apps" to canDrawOverlays,
         "Exact alarms" to canScheduleExactAlarms,
         "Notifications" to hasNotifications,
         "Usage access" to hasUsageAccess,
@@ -154,11 +162,21 @@ fun SettingsScreen(
 
         ProtectionSummaryCard(
             isArmed               = isArmed,
-            isAccessibilityActive = isAccessibilityActive,
-            isAdminActive         = isAdminActive,
+            protection            = protection,
             extras                = extras,
             onOpenSetup           = onPermissions,
         )
+
+        crashReport?.let { report ->
+            Spacer(Modifier.height(12.dp))
+            CrashReportCard(
+                report = report,
+                onDismiss = {
+                    CrashLog.clear(context)
+                    crashReport = null
+                },
+            )
+        }
 
         SettingsSection("Tools") {
             SettingsRow(
@@ -251,8 +269,7 @@ fun SettingsScreen(
 @Composable
 private fun ProtectionSummaryCard(
     isArmed: Boolean,
-    isAccessibilityActive: Boolean,
-    isAdminActive: Boolean,
+    protection: Protection,
     extras: List<Pair<String, Boolean>>,
     onOpenSetup: () -> Unit,
 ) {
@@ -272,10 +289,11 @@ private fun ProtectionSummaryCard(
                     style = MaterialTheme.typography.titleLarge,
                 )
                 Text(
-                    if (isArmed) {
-                        "Locked apps get bounced, and the app can't be uninstalled mid-lock."
-                    } else {
-                        "Tap to finish setup — locks aren't fully enforced yet."
+                    when {
+                        isArmed -> "Locked apps get bounced, and the app can't be uninstalled mid-lock."
+                        protection.accessibility == AccessibilityUi.NOT_RUNNING ->
+                            "Accessibility is on but its service has stopped. Tap to restart it."
+                        else -> "Tap to finish setup — locks aren't fully enforced yet."
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -289,8 +307,16 @@ private fun ProtectionSummaryCard(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalArrangement   = Arrangement.spacedBy(6.dp),
         ) {
-            CapabilityPill("Accessibility", isAccessibilityActive, required = true)
-            CapabilityPill("Device Admin", isAdminActive, required = true)
+            CapabilityPill(
+                when (protection.accessibility) {
+                    AccessibilityUi.NOT_RUNNING -> "Accessibility stopped"
+                    AccessibilityUi.STARTING -> "Accessibility starting"
+                    else -> "Accessibility"
+                },
+                protection.accessibility == AccessibilityUi.RUNNING || protection.accessibility == AccessibilityUi.STARTING,
+                required = true,
+            )
+            CapabilityPill("Device Admin", protection.admin, required = true)
             extras.forEach { (label, granted) ->
                 CapabilityPill(label, granted, required = false)
             }
@@ -329,6 +355,58 @@ private fun CapabilityPill(label: String, granted: Boolean, required: Boolean) {
         )
         Spacer(Modifier.width(5.dp))
         Text(label, style = MaterialTheme.typography.labelMedium, color = fg)
+    }
+}
+
+// ── crash report ───────────────────────────────────────────────────────────────
+/**
+ * The last crash CrashLog kept, with a copy button: the trace is what turns "it crashed" into a
+ * fix, and this app has no other way to get one off the phone.
+ */
+@Composable
+private fun CrashReportCard(report: String, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val isCrash = report.startsWith("Crash")
+    Panel(color = StatusColors.Warning.copy(alpha = 0.08f)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconTile(
+                Icons.Outlined.BugReport,
+                tint = StatusColors.Warning,
+                background = StatusColors.Warning.copy(alpha = 0.14f),
+            )
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    if (isCrash) "App Blocker crashed" else "Something went wrong",
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Text(
+                    report.lineSequence().drop(1).firstOrNull()?.removePrefix("When: ")?.replace('T', ' ')?.take(16).orEmpty(),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+        Text(
+            report.lineSequence().drop(6).take(3).joinToString("\n"),
+            style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 3,
+        )
+        Spacer(Modifier.height(12.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            SecondaryButton(
+                "Copy report",
+                onClick = {
+                    val clipboard = context.getSystemService(ClipboardManager::class.java)
+                    clipboard?.setPrimaryClip(ClipData.newPlainText("App Blocker crash", report))
+                    Toast.makeText(context, "Copied. Paste it wherever you're reporting it.", Toast.LENGTH_SHORT).show()
+                },
+                modifier = Modifier.weight(1f),
+            )
+            SecondaryButton("Dismiss", onClick = onDismiss, modifier = Modifier.weight(1f))
+        }
     }
 }
 

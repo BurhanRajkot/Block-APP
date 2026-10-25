@@ -14,8 +14,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ReelCountEntity::class,
         UsageDayEntity::class,
         UsageAppEntity::class,
+        PlanDayEntity::class,
     ],
-    version = 4,
+    version = 5,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -31,7 +32,8 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "blockapp.db",
-                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build().also { instance = it }
+                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                    .build().also { instance = it }
             }
 
         /**
@@ -83,6 +85,22 @@ abstract class AppDatabase : RoomDatabase() {
                         "`packageName` TEXT NOT NULL, `label` TEXT NOT NULL, " +
                         "`foregroundMs` INTEGER NOT NULL, `opens` INTEGER NOT NULL, " +
                         "PRIMARY KEY(`day`, `packageName`))",
+                )
+            }
+        }
+
+        /**
+         * v5 adds plan_days, the reel plan's per-day record (see PlanDayEntity). A pure addition.
+         * Copied from createAllTables in the generated AppDatabase_Impl, for the same reason as
+         * MIGRATION_1_2.
+         */
+        private val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `plan_days` (`day` TEXT NOT NULL, " +
+                        "`limitReels` INTEGER NOT NULL, `limitWalls` INTEGER NOT NULL, " +
+                        "`quietWalls` INTEGER NOT NULL, `tracked` INTEGER NOT NULL, " +
+                        "PRIMARY KEY(`day`))",
                 )
             }
         }
